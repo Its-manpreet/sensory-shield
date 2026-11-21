@@ -14,33 +14,71 @@
  * label shown on screen; only the text sent to the model is expanded. Matching is on the lowercased word.
  */
 const HINTS = {
-  gore: 'gore (blood, open wounds, graphic injury)',
-  blood: 'blood or bleeding wounds',
-  'graphic-injury': 'graphic injury or gore (blood, open wounds)',
-  'graphic-violence': 'graphic violence (people being hurt, fighting with weapons)',
-  violence: 'violence (people being hurt or attacked)',
-  pornography: 'pornography or nudity (naked bodies, sexual content)',
-  porn: 'pornography or nudity (naked bodies, sexual content)',
-  nudity: 'nudity (naked bodies)',
-  nsfw: 'nudity or sexual content',
-  'self-harm': 'self-harm (cuts on skin, injuries to oneself)',
-  needles: 'needles or syringes',
-  insects: 'insects or bugs',
+  gore: 'blood, open wounds, graphic injury',
+  blood: 'blood, bleeding wounds',
+  'graphic-injury': 'gore, blood, open wounds, badly injured bodies',
+  'graphic-violence': 'people being hurt or attacked, fighting with weapons, shootings',
+  violence: 'people being hurt or attacked, fights',
+  pornography: 'nudity, naked bodies, sexual content',
+  porn: 'nudity, naked bodies, sexual content',
+  nudity: 'naked bodies',
+  nsfw: 'nudity, sexual content',
+  'self-harm': 'cuts on skin, injuries people give themselves',
+  needles: 'needles, syringes, injections',
+  guns: 'pistols, rifles, shotguns, any firearm',
+  gun: 'pistols, rifles, shotguns, any firearm',
+  weapons: 'guns, knives, swords',
+  knives: 'knives, blades',
+  insects: 'insects, bugs',
   snakes: 'snakes',
-  clowns: 'clowns (people with clown makeup or costumes)',
-  clown: 'clowns (people with clown makeup or costumes)',
-  cartoon: 'cartoons or animated drawings',
-  cartoons: 'cartoons or animated drawings',
+  clowns: 'people with clown makeup or clown costumes',
+  clown: 'people with clown makeup or clown costumes',
+  cartoon: 'cartoons, animated drawings',
+  cartoons: 'cartoons, animated drawings',
 };
 
 const PRETTY = { 'graphic-violence': 'graphic violence', 'graphic-injury': 'graphic injury' };
 
 /** @typedef {{ id: string, label: string }} VisionTerm  id = trigger id, label = what the user typed */
 
+/** visual descriptions the model wrote for other words (see conceptPrompt), filled at runtime */
+const learned = new Map();
+
 /** the text sent to the model for a term */
 export function describeTerm(term) {
   const key = term.label.trim().toLowerCase();
-  return HINTS[key] ?? PRETTY[key] ?? key;
+  const name = PRETTY[key] ?? key;
+  if (HINTS[key]) return HINTS[key] === name ? name : `${name} (${HINTS[key]})`;
+  return learned.get(key) ?? name;
+}
+
+/** true when a word has no built-in or learned description yet */
+export function needsConcept(term) {
+  const key = term.label.trim().toLowerCase();
+  return !HINTS[key] && !PRETTY[key] && !learned.has(key);
+}
+
+/**
+ * Text-only request, once per new word: the model spells out what the thing LOOKS like, so a short or
+ * abstract word ("guns", "medical stuff") becomes concrete visual forms it can find in a picture.
+ */
+export function conceptPrompt(term) {
+  return (
+    `A person does not want to see pictures of "${term.label}". In at most 12 words, list the concrete things ` +
+    `a picture of "${term.label}" would typically show (kinds, forms, close variants). Reply with the list only.`
+  );
+}
+
+export function learnConcept(term, answer) {
+  const key = term.label.trim().toLowerCase();
+  // the answer is a list in some format (commas, dashes, bullets, lines): keep up to 8 distinct items
+  const seen = new Set([key]);
+  const items = (answer ?? '')
+    .split(/[,;\n\r]|\s+-\s+|\s*\u2022\s*/)
+    .map((x) => x.replace(/^[\s"'*\d.)-]+|[\s"'.*]+$/g, '').replace(/\s+etc$/i, '').trim())
+    .filter((x) => x && x.length <= 40 && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()))
+    .slice(0, 8);
+  learned.set(key, items.length ? `${key} (${items.join(', ').toLowerCase()})` : key);
 }
 
 /** label shown in the frosted pill */
@@ -48,20 +86,47 @@ export function displayLabel(term) {
   return PRETTY[term.label] ?? term.label;
 }
 
+/** short name, then what it looks like on its own line: the model echoes only the short name back */
+function termList(terms) {
+  return terms
+    .map((t, i) => {
+      const d = describeTerm(t);
+      const name = displayLabel(t).toLowerCase();
+      const looks = d.startsWith(name) ? d.slice(name.length).replace(/^\s*\(|\)\s*$/g, '').trim() : d;
+      return `${i + 1}. ${name}${looks ? `\n   looks like: ${looks}` : ''}`;
+    })
+    .join('\n');
+}
+
 /** @param {VisionTerm[]} terms */
 export function detectPrompt(terms) {
-  const list = terms.map((t, i) => `${i + 1}. ${describeTerm(t)}`).join('\n');
+  const list = termList(terms);
   return (
-    `Find these things in the screenshot:\n${list}\n` +
-    `Only report a thing if it is clearly visible. Output a JSON list of {"label": the number of the thing, ` +
-    `"bbox": [x1, y1, x2, y2]}. Output [] if none are visible.`
+    `Find these things in the pictures, photos, drawings or videos in this screenshot:\n${list}\n` +
+    `Only report a thing if it is actually pictured and clearly visible. Ignore written text: a word that only ` +
+    `names a thing is not the thing. Give a tight box around the thing itself. Output a JSON list of ` +
+    `{"label": the number of the thing, "bbox": [x1, y1, x2, y2]}. Output [] if none are visible.`
   );
 }
 
 /** @param {VisionTerm[]} terms */
 export function classifyPrompt(terms) {
-  const list = terms.map((t, i) => `${i + 1}. ${describeTerm(t)}`).join('\n');
-  return `Which of these does this image show?\n${list}\nAnswer with the number only, or 0 if none of them.`;
+  const list = termList(terms);
+  return (
+    `Which of these does this picture show?\n${list}\nOnly count things that are actually pictured (a photo, ` +
+    `drawing or video). Written words that only name a thing do not count.\nAnswer with the number only, or 0 if none of them.`
+  );
+}
+
+/**
+ * Asked only for boxes that matched a term: a crop of a heading or paragraph that NAMES the thing ("10 facts
+ * about spiders") can fool the classify question, but this direct question separates text from pictures
+ * reliably (5/5 on headings, paragraphs, photos, a cartoon).
+ */
+export const TEXT_PROMPT = 'Is this image mostly text (words, letters, a web page paragraph or heading)? Answer only yes or no.';
+
+export function isYes(text) {
+  return /^\W*yes\b/i.test(text ?? '');
 }
 
 /**
@@ -87,9 +152,9 @@ export function parseDetections(text, terms) {
   const out = [];
   const chunks = (text ?? '').split('}');
   for (const chunk of chunks) {
-    const boxes = [...chunk.matchAll(/"(?:bbox_2d|bbox|box)"\s*:\s*\[([^\]]*)\]/g)].map((m) => m[1].split(',').map((v) => Number(v.trim())));
+    const boxes = [...chunk.matchAll(/"(?:bbox_2d|box_2d|bbox|box)"\s*:\s*\[([^\]]*)\]/g)].map((m) => m[1].split(',').map((v) => Number(v.trim())));
     if (!boxes.length) continue;
-    const labelMatch = chunk.match(/"(?:label|category|name)"\s*:\s*("([^"]*)"|-?\d+)/);
+    const labelMatch = chunk.match(/"(?:label|category|name|number)"\s*:\s*("([^"]*)"|-?\d+)/);
     const label = labelMatch ? (labelMatch[2] ?? labelMatch[1]) : null;
     for (const b of boxes) {
       if (b.length !== 4 || !b.every(Number.isFinite)) continue;
@@ -142,7 +207,7 @@ function matchTerm(label, terms) {
 }
 
 /** expand a box a little so the blur fully covers the object's edges */
-export function padBox(box, pad = 0.03) {
+export function padBox(box, pad = 0.008) {
   const x = Math.max(0, box.x - pad), y = Math.max(0, box.y - pad);
   return { x, y, w: Math.min(1, box.x + box.w + pad) - x, h: Math.min(1, box.y + box.h + pad) - y };
 }

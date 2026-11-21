@@ -71,7 +71,7 @@ export function startVision() {
     const apiKey = randomBytes(24).toString('hex');
     const t0 = performance.now();
     const args = ['-m', p.model, '--mmproj', p.mmproj, '--host', '127.0.0.1', '--port', String(port), '--api-key', apiKey,
-      '-c', '4096', '-np', '1', '-ngl', '99', '--no-webui', '--temp', '0.1', '--top-k', '50', '--repeat-penalty', '1.1'];
+      '-c', '8192', '-np', '2', '-ngl', '99', '--no-webui', '--temp', '0.1', '--top-k', '50', '--repeat-penalty', '1.1']; // 2 slots: crop checks run side by side
     child = spawn(p.exe, args, { cwd: p.binDir, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let log = '';
     const onData = (d) => {

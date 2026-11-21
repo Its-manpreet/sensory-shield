@@ -22,7 +22,8 @@ export function createSampler(video, { gridW = 64, gridH = 36, tilesX = 4, tiles
   // shimmer (aliasing) and can look like flicker. A 4x-grid intermediate with high-quality smoothing
   // gives true area averages, which keeps motion looking like motion to the flash detector.
   const mid = new OffscreenCanvas(gridW * 4, gridH * 4);
-  const mctx = /** @type {OffscreenCanvasRenderingContext2D} */ (mid.getContext('2d'));
+  const mctx = /** @type {OffscreenCanvasRenderingContext2D} */ (mid.getContext('2d', { willReadFrequently: true }));
+  let gray = new Uint8Array(mid.width * mid.height); // for keeping blurs on moving content (box-motion.js)
   mctx.imageSmoothingQuality = 'high';
   ctx.imageSmoothingQuality = 'high';
   let current = new Uint8ClampedArray(gridW * gridH * 4);
@@ -34,8 +35,17 @@ export function createSampler(video, { gridW = 64, gridH = 36, tilesX = 4, tiles
       mctx.drawImage(video, 0, 0, mid.width, mid.height);
       ctx.drawImage(mid, 0, 0, gridW, gridH);
       current = ctx.getImageData(0, 0, gridW, gridH).data;
+      const m = mctx.getImageData(0, 0, mid.width, mid.height).data;
+      gray = new Uint8Array(mid.width * mid.height);
+      for (let i = 0, p = 0; i < gray.length; i++, p += 4) gray[i] = (54 * m[p] + 183 * m[p + 1] + 19 * m[p + 2]) >> 8;
       return current;
     },
+    /** grayscale of the latest frame at 4x the grid (256x144), memory only */
+    gray() {
+      return gray;
+    },
+    grayWidth: mid.width,
+    grayHeight: mid.height,
     /**
      * Mean absolute difference per tile vs. the frame at the previous content check.
      * @returns {boolean[]} row-major tilesX*tilesY; all true on the first call

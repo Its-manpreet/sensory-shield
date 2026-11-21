@@ -46,7 +46,7 @@ export function defaultSettings() {
     profiles: structuredClone(DEFAULT_PROFILES),
     // How flashing is softened. 'glass': frosted fog over a time-smoothed copy (colours drift slowly);
     // 'dim': dark veil. smoothMs: time constant of the colour smoothing. Not part of Profile (frozen contract).
-    appearance: { flashStyle: 'glass', smoothMs: 900 },
+    appearance: { flashStyle: 'glass', smoothMs: 900, peekRadius: 0 }, // peekRadius > 0: clear content blur around the cursor (CSS px)
   };
 }
 

@@ -7,6 +7,12 @@
  * @param {import('../shared/types.js').Profile} profile
  * @returns {import('../shared/types.js').Region[]}
  */
+let revealHint = '';
+/** e.g. "⌥⌘R": shown in content labels so the reveal hotkey is discoverable */
+export function setRevealHint(text) {
+  revealHint = text;
+}
+
 export function toRegions(flashEvents, tiles, profile) {
   const regions = [];
   if (profile.flash.enabled) {
@@ -27,7 +33,7 @@ export function toRegions(flashEvents, tiles, profile) {
         id: t.id ?? `tile-${t.rect.x.toFixed(3)}-${t.rect.y.toFixed(3)}`, // detectors may give stable ids
         rect: t.rect,
         effect: 'blur',
-        reason: `Blurred: ${t.label ?? t.triggerId}`,
+        reason: `Blurred: ${t.label ?? t.triggerId}${revealHint ? ` · ${revealHint} to show` : ''}`,
         strength: Math.min(1, profile.response.blurStrengthPx / 40),
       });
     }

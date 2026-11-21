@@ -5,8 +5,9 @@ import { createContentDetector, triggersForProfile } from '../engine/content.js'
 import { activeProfile } from '../shared/profiles.js';
 import { getSettings, onChange } from '../shared/store.js';
 import { createEffects } from './effects.js';
-import { toRegions } from './regions.js';
+import { toRegions, setRevealHint } from './regions.js';
 import { startCapture, createSampler } from './capture.js';
+import { trackBox, moveBox } from './box-motion.js';
 
 // A vision-model check takes ~1-2 s; checks run back to back while the screen keeps changing, at most this often.
 const CONTENT_INTERVAL_MS = 500;
@@ -81,6 +82,11 @@ function applySettings(s) {
 }
 onChange(applySettings);
 window.shield?.onReveal(({ ms }) => effects.revealAll(ms));
+window.shield?.onCursor?.((p) => effects.setCursor(p));
+window.shield?.getStatus?.().then(({ hotkeys, platform }) => {
+  const mac = platform === 'darwin';
+  setRevealHint((hotkeys?.reveal ?? '').replace('CommandOrControl+', mac ? '⌘' : 'Ctrl+').replace('Alt+', mac ? '⌥' : 'Alt+'));
+});
 window.shield?.onToggle(({ enabled }) => applySettings({ ...settings, enabled }));
 
 // --- stats (counts only) ---
@@ -124,7 +130,16 @@ async function checkContent(now) {
     if (changed.some(Boolean)) {
       const t0 = performance.now();
       const bitmap = await createImageBitmap(video);
-      lastTiles = await content.scoreTiles(bitmap, changed);
+      const snapshot = sampler.gray(); // the screen as the model will see it
+      content.syncTiles?.(lastTiles);
+      const found = await content.scoreTiles(bitmap, changed);
+      // the screen may have scrolled during the ~1 s check: move the new boxes by what their content did since
+      lastTiles = found.map((t) => {
+        if (!t.triggerId) return t;
+        const d = trackBox(snapshot, sampler.gray(), sampler.grayWidth, sampler.grayHeight, t.rect, 72, 36);
+        const rect = d ? moveBox(t.rect, d) : t.rect;
+        return rect ? { ...t, rect } : null;
+      }).filter(Boolean);
       if (debug) log(`content check ${Math.round(performance.now() - t0)} ms: ${lastTiles.map((t) => t.label).join(', ') || 'nothing found'}`);
       bitmap.close();
       stats.modelMs += performance.now() - t0;
@@ -137,11 +152,27 @@ async function checkContent(now) {
   }
 }
 
+/** between vision checks, each blur box follows its content (scrolling, moving windows) */
+function followContent(prev, cur) {
+  if (!lastTiles.length || prev.length !== cur.length) return;
+  lastTiles = lastTiles
+    .map((t) => {
+      if (!t.triggerId) return t;
+      const d = trackBox(prev, cur, sampler.grayWidth, sampler.grayHeight, t.rect, 24, 12);
+      if (!d || (d.dx === 0 && d.dy === 0)) return t;
+      const rect = moveBox(t.rect, d);
+      return rect ? { ...t, rect } : null;
+    })
+    .filter(Boolean);
+}
+
 function onFrame(now) {
   video.requestVideoFrameCallback(onFrame);
   if (!settings.enabled) return;
   stats.frames++;
+  const prevGray = sampler.gray();
   const data = sampler.sample();
+  followContent(prevGray, sampler.gray());
   const t0 = performance.now();
   flashEvents = profile.flash.enabled ? flash.push({ data, tMs: now }) : [];
   stats.flashMs += performance.now() - t0;

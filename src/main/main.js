@@ -20,6 +20,36 @@ let overlayWin = null;
 let settingsWin = null;
 let tray = null;
 let lastStats = null;
+let revealUntil = 0;
+let cursorTimer = null;
+
+/** reveal hotkey: show everything for REVEAL_MS; pressing it again while revealed ends the reveal early */
+function toggleReveal() {
+  const now = Date.now();
+  const ms = now < revealUntil ? 0 : REVEAL_MS;
+  revealUntil = now + ms;
+  broadcast('shield:reveal', { ms });
+}
+
+/** "clear the blur around the cursor": stream the cursor position (normalized) to the overlay while enabled */
+function updateCursorFeed() {
+  const want = settings.enabled && (settings.appearance?.peekRadius ?? 0) > 0;
+  if (want && !cursorTimer) {
+    let last = '';
+    cursorTimer = setInterval(() => {
+      if (!overlayWin || overlayWin.isDestroyed()) return;
+      const { bounds: b } = screen.getPrimaryDisplay();
+      const p = screen.getCursorScreenPoint();
+      const msg = { x: (p.x - b.x) / b.width, y: (p.y - b.y) / b.height };
+      const key = `${msg.x.toFixed(4)},${msg.y.toFixed(4)}`;
+      if (key !== last) (last = key), overlayWin.webContents.send('shield:cursor', msg);
+    }, 16);
+  } else if (!want && cursorTimer) {
+    clearInterval(cursorTimer);
+    cursorTimer = null;
+    overlayWin?.webContents.send('shield:cursor', null);
+  }
+}
 
 function broadcast(channel, payload) {
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send(channel, payload);
@@ -109,7 +139,7 @@ function refreshTray() {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: settings.enabled ? 'Turn shield off' : 'Turn shield on', click: () => setEnabled(!settings.enabled) },
-      { label: `Reveal for ${REVEAL_MS / 1000} s`, accelerator: HOTKEYS.reveal, click: () => broadcast('shield:reveal', { ms: REVEAL_MS }) },
+      { label: `Reveal for ${REVEAL_MS / 1000} s`, accelerator: HOTKEYS.reveal, click: toggleReveal },
       { label: 'Settings…', click: openSettings },
       { type: 'separator' },
       { label: 'Quit', role: 'quit' },
@@ -134,6 +164,7 @@ function registerIpc() {
     saveSettings(settings);
     broadcast('settings:changed', settings);
     refreshTray();
+    updateCursorFeed();
     return settings;
   });
   ipcMain.handle('shield:status', () => ({ screenAccess: screenAccess(), platform: process.platform, hotkeys: HOTKEYS }));
@@ -195,7 +226,8 @@ app.whenReady().then(() => {
   registerIpc();
   createOverlay();
   createTray();
-  globalShortcut.register(HOTKEYS.reveal, () => broadcast('shield:reveal', { ms: REVEAL_MS }));
+  globalShortcut.register(HOTKEYS.reveal, toggleReveal);
+  updateCursorFeed();
   globalShortcut.register(HOTKEYS.toggle, () => setEnabled(!settings.enabled));
   globalShortcut.register(HOTKEYS.settings, openSettings);
   openSettings(); // the window is the app's face; closing it leaves the shield running in the tray

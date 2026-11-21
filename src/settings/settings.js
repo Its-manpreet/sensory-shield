@@ -172,6 +172,7 @@ function render() {
   $('fade').value = p.response.fadeMs;
   $('fade-out').textContent = `${p.response.fadeMs} ms`;
   $('labels').checked = p.response.showLabel;
+  $('peek').checked = (look.peekRadius ?? 0) > 0;
   renderHero();
 }
 
@@ -237,6 +238,10 @@ $('fade').addEventListener('input', (e) => {
   $('fade-out').textContent = `${e.target.value} ms`;
 });
 $('labels').addEventListener('change', (e) => patchProfile('response', { showLabel: e.target.checked }));
+$('peek').addEventListener('change', (e) => {
+  settings = { ...settings, appearance: { ...settings.appearance, peekRadius: e.target.checked ? 110 : 0 } };
+  save({ appearance: settings.appearance });
+});
 $('open-permission').addEventListener('click', () => shield?.openPermission());
 $('relaunch').addEventListener('click', () => shield?.relaunch());
 

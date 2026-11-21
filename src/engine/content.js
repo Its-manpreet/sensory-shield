@@ -106,6 +106,15 @@ export async function createContentDetector(config = {}) {
       tracked = trackDetections(tracked, detections, () => String(++counter));
       return results();
     },
+    /**
+     * Additive (not in the contract): the overlay moves boxes with their content between checks; tell the
+     * detector where they are now, so a box kept through a missed check is not shown at a stale place.
+     * @param {import('../shared/types.js').TileResult[]} tiles
+     */
+    syncTiles(tiles) {
+      const byId = new Map(tiles.map((t) => [t.id, t.rect]));
+      tracked = tracked.map((t) => (byId.has(`content-${t.key}`) ? { ...t, box: byId.get(`content-${t.key}`) } : t)).filter((t) => byId.has(`content-${t.key}`)); // gone from the overlay (scrolled off screen): forget it
+    },
     dispose() {
       tracked = [];
     },
