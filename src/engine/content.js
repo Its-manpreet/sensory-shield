@@ -12,6 +12,16 @@ export const DEFAULT_CONTENT_CONFIG = Object.freeze({
 });
 
 /**
+ * Triggers to embed for a profile (additive export, not in the frozen contract).
+ * @param {import('../shared/types.js').Profile} profile
+ * @returns {import('../shared/types.js').Trigger[]}
+ */
+export function triggersForProfile(profile) {
+  const labels = [...profile.content.categories, ...profile.content.customTriggers];
+  return labels.map((label) => ({ id: label, label, prompts: [`a photo of ${label}`], threshold: profile.content.threshold }));
+}
+
+/**
  * @param {Partial<import('../shared/types.js').ContentConfig>} [config]
  */
 export async function createContentDetector(config = {}) {

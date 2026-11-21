@@ -1,38 +1,145 @@
-// OWNER: Agent A. Overlay renderer: capture loop -> detectors -> regions -> effects.
-// SCAFFOLD: wiring only. Agent A fills in capture (getDisplayMedia) and the frame loop at Step 1/2.
+// OWNER: Agent A. Overlay renderer: capture -> flash detector (every frame) + content detector (2-4 Hz,
+// changed tiles only) -> regions -> effects. Frames live in memory only.
 import { createFlashDetector } from '../engine/flash.js';
-import { createContentDetector } from '../engine/content.js';
+import { createContentDetector, triggersForProfile } from '../engine/content.js';
 import { activeProfile } from '../shared/profiles.js';
 import { getSettings, onChange } from '../shared/store.js';
 import { createEffects } from './effects.js';
 import { toRegions } from './regions.js';
+import { startCapture, createSampler } from './capture.js';
+
+const CONTENT_INTERVAL_MS = 333; // about 3 checks per second
+const TILES = { tilesX: 4, tilesY: 3 };
 
 const video = /** @type {HTMLVideoElement} */ (document.getElementById('capture'));
 const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById('fx'));
-const selftest = new URLSearchParams(location.search).has('selftest');
+const params = new URLSearchParams(location.search);
+const selftest = params.has('selftest');
+const log = (...a) => console.log('[shield]', ...a);
 
 let settings = await getSettings();
-const effects = createEffects(canvas, video);
-const flash = createFlashDetector({ ...activeProfile(settings).flash });
-const content = await createContentDetector({});
-const info = await content.init();
+let profile = activeProfile(settings);
+const effects = createEffects(canvas, video, { fadeMs: profile.response.fadeMs });
+effects.setLabelsVisible(profile.response.showLabel);
+let flash = createFlashDetector({ ...profile.flash });
+const sampler = createSampler(video, TILES);
 
-onChange((s) => {
+// --- content detector: optional. If it fails, flash protection keeps running. ---
+let content = null;
+let contentInfo = { device: 'off', modelId: '', loadMs: 0 };
+let lastTiles = [];
+let contentBusy = false;
+let lastContentAt = 0;
+let forceAllTiles = false;
+
+async function loadContent() {
+  try {
+    const det = await createContentDetector({ ...TILES });
+    contentInfo = await det.init();
+    await det.setTriggers(triggersForProfile(profile));
+    content = det;
+    log(`content detector ready: ${contentInfo.device} ${contentInfo.modelId} in ${Math.round(contentInfo.loadMs)} ms`);
+  } catch (err) {
+    contentInfo = { device: 'failed', modelId: '', loadMs: 0 };
+    log(`content detector unavailable, flash protection only: ${err?.message ?? err}`);
+  }
+}
+
+function applySettings(s) {
+  const prevFlash = JSON.stringify(profile.flash);
+  const prevTriggers = JSON.stringify(triggersForProfile(profile));
   settings = s;
-  effects.setLabelsVisible(activeProfile(s).response.showLabel);
-});
+  profile = activeProfile(s);
+  if (JSON.stringify(profile.flash) !== prevFlash) flash = createFlashDetector({ ...profile.flash });
+  const triggers = triggersForProfile(profile);
+  if (content && JSON.stringify(triggers) !== prevTriggers) {
+    content.setTriggers(triggers).then(() => (lastTiles = []), (e) => log('setTriggers failed', e));
+    lastContentAt = 0; // re-check right away with all tiles
+    sampler.changedTiles(); // reset baseline; next check is forced below
+    forceAllTiles = true;
+  }
+  effects.setFadeMs(profile.response.fadeMs);
+  effects.setLabelsVisible(profile.response.showLabel);
+  if (!s.enabled) effects.clear();
+}
+onChange(applySettings);
 window.shield?.onReveal(({ ms }) => effects.revealAll(ms));
-window.shield?.onToggle(({ enabled }) => {
-  if (!enabled) effects.setRegions([], performance.now());
-});
+window.shield?.onToggle(({ enabled }) => applySettings({ ...settings, enabled }));
 
-// TODO(Agent A, Step 1): navigator.mediaDevices.getDisplayMedia({ video: true }) -> video.srcObject,
-// then a requestVideoFrameCallback loop: 64x36 frame -> flash.push(); every 250-500 ms changed tiles -> content.scoreTiles().
-const events = flash.push({ data: new Uint8ClampedArray(64 * 36 * 4), tMs: performance.now() });
-const tiles = await content.scoreTiles(new ImageData(4, 3));
-effects.setRegions(toRegions(events, tiles, activeProfile(settings)), performance.now());
+// --- stats (counts only) ---
+const stats = { frames: 0, flashMs: 0, modelMs: 0, modelRuns: 0, since: performance.now() };
+setInterval(() => {
+  const now = performance.now();
+  const secs = (now - stats.since) / 1000;
+  const out = {
+    fps: stats.frames / secs,
+    flashMs: stats.frames ? stats.flashMs / stats.frames : 0,
+    modelMs: stats.modelRuns ? stats.modelMs / stats.modelRuns : 0,
+    modelHz: stats.modelRuns / secs,
+    device: contentInfo.device,
+  };
+  window.shield?.sendStats(out);
+  if (selftest) log('stats', JSON.stringify(out));
+  Object.assign(stats, { frames: 0, flashMs: 0, modelMs: 0, modelRuns: 0, since: now });
+}, 1000);
+
+// --- per-frame loop ---
+let flashEvents = [];
+
+async function checkContent(now) {
+  contentBusy = true;
+  lastContentAt = now;
+  try {
+    const changed = sampler.changedTiles();
+    if (forceAllTiles) changed.fill(true), (forceAllTiles = false);
+    if (changed.some(Boolean) || !lastTiles.length) {
+      const t0 = performance.now();
+      const bitmap = await createImageBitmap(video);
+      lastTiles = await content.scoreTiles(bitmap, lastTiles.length ? changed : undefined);
+      bitmap.close();
+      stats.modelMs += performance.now() - t0;
+      stats.modelRuns++;
+    }
+  } catch (err) {
+    log('content check failed', err?.message ?? err);
+  } finally {
+    contentBusy = false;
+  }
+}
+
+function onFrame(now) {
+  video.requestVideoFrameCallback(onFrame);
+  if (!settings.enabled) return;
+  stats.frames++;
+  const data = sampler.sample();
+  const t0 = performance.now();
+  flashEvents = profile.flash.enabled ? flash.push({ data, tMs: now }) : [];
+  stats.flashMs += performance.now() - t0;
+
+  if (content && profile.content.enabled && !contentBusy && now - lastContentAt >= CONTENT_INTERVAL_MS) checkContent(now);
+  const tiles = content && profile.content.enabled ? lastTiles : [];
+  effects.setRegions(toRegions(flashEvents, tiles, profile), now);
+}
+
+// Effects redraw on every display frame so fades stay smooth even when the capture is idle.
+function onAnimationFrame(now) {
+  requestAnimationFrame(onAnimationFrame);
+  effects.draw(now);
+}
+
+try {
+  await startCapture(video);
+  log(`capture started ${video.videoWidth}x${video.videoHeight}, window ${innerWidth}x${innerHeight} @${devicePixelRatio}x`);
+  video.requestVideoFrameCallback(onFrame);
+  requestAnimationFrame(onAnimationFrame);
+} catch (err) {
+  log(`capture failed: ${err?.name} ${err?.message}`);
+}
+loadContent();
 
 if (selftest) {
+  log(`window ${screenX},${screenY} ${innerWidth}x${innerHeight} vs screen ${screen.width}x${screen.height} @${devicePixelRatio}x`);
   const t = await import('@huggingface/transformers');
-  console.log(`SELFTEST overlay ok: profile=${settings.activeProfileId} content=${info.device} regions=0 transformers=${t.env.version}`);
+  log(`SELFTEST overlay ok: profile=${settings.activeProfileId} transformers=${t.env.version}`);
 }
+if (params.has('spike')) (await import('./spike.js')).runSpike(video, canvas, log);

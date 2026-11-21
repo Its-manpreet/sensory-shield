@@ -1,5 +1,5 @@
 // OWNER: Agent A. Electron main process: overlay + settings windows, tray, hotkeys, IPC, capture permission.
-import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, screen, session, desktopCapturer, nativeImage } from 'electron';
+import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, screen, session, desktopCapturer, nativeImage, systemPreferences } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings } from './settings-file.js';
@@ -8,6 +8,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(here, '..');
 const PRELOAD = path.join(here, 'preload.cjs');
 const SELFTEST = process.env.SHIELD_SELFTEST === '1'; // `npm run selftest`: log renderer output, quit after a few seconds
+const SPIKE = process.env.SHIELD_SPIKE === '1'; // `npm run spike`: feedback-loop check, see src/overlay/spike.js
 const ALLOW_NETWORK = process.env.SHIELD_ALLOW_NETWORK === '1'; // dev only; the app must work with this OFF
 
 export const HOTKEYS = { reveal: 'CommandOrControl+Alt+R', toggle: 'CommandOrControl+Alt+S', settings: 'CommandOrControl+Alt+,' };
@@ -39,14 +40,19 @@ function createOverlay() {
     skipTaskbar: true,
     hasShadow: false,
     alwaysOnTop: true,
+    enableLargerThanScreen: true,
     webPreferences: { preload: PRELOAD, sandbox: true, contextIsolation: true, backgroundThrottling: false },
   });
   overlayWin.setAlwaysOnTop(true, 'screen-saver');
+  overlayWin.setBounds(bounds); // macOS pushes new windows below the menu bar; the overlay must cover it too
   overlayWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   overlayWin.setIgnoreMouseEvents(true); // clicks pass through to apps below
   overlayWin.setContentProtection(true); // keep the overlay out of our own capture (VERIFY per OS, see CLAUDE.md)
   forwardConsole(overlayWin, 'overlay');
-  overlayWin.loadFile(path.join(SRC, 'overlay/index.html'), SELFTEST ? { query: { selftest: '1' } } : undefined);
+  const query = {};
+  if (SELFTEST) query.selftest = '1';
+  if (SPIKE) query.spike = '1';
+  overlayWin.loadFile(path.join(SRC, 'overlay/index.html'), { query });
 }
 
 function openSettings() {
@@ -127,9 +133,19 @@ function registerCaptureHandler() {
   // getDisplayMedia() in the overlay resolves to the primary screen without a picker.
   // Agent A: verify on each OS (macOS needs Screen Recording permission for the app / terminal).
   session.defaultSession.setDisplayMediaRequestHandler(async (_req, cb) => {
-    const sources = await desktopCapturer.getSources({ types: ['screen'] });
-    const primaryId = String(screen.getPrimaryDisplay().id);
-    cb({ video: sources.find((s) => s.display_id === primaryId) ?? sources[0] });
+    try {
+      const sources = await desktopCapturer.getSources({ types: ['screen'] });
+      const primaryId = String(screen.getPrimaryDisplay().id);
+      const source = sources.find((s) => s.display_id === primaryId) ?? sources[0];
+      if (!source) throw new Error('no screen sources (screen recording permission?)');
+      cb({ video: source });
+    } catch (err) {
+      const access = process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'n/a';
+      console.error(`[main] screen capture unavailable (screen access: ${access}): ${err?.message ?? err}`);
+      try {
+        cb({}); // denies the request; getDisplayMedia rejects in the overlay
+      } catch {}
+    }
   });
 }
 
@@ -145,7 +161,7 @@ app.whenReady().then(() => {
   globalShortcut.register(HOTKEYS.settings, openSettings);
   if (SELFTEST) {
     openSettings();
-    setTimeout(() => app.quit(), 6000);
+    setTimeout(() => app.quit(), SPIKE ? 9000 : 6000);
   }
 });
 
