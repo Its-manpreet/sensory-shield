@@ -36,7 +36,7 @@ export const DEFAULT_PROFILES = {
  * @returns {import('./types.js').Settings}
  */
 /** bump when default numbers change; older saved settings are migrated in src/main/settings-file.js */
-export const SETTINGS_VERSION = 4;
+export const SETTINGS_VERSION = 7;
 
 export function defaultSettings() {
   return {
@@ -47,6 +47,16 @@ export function defaultSettings() {
     // How flashing is softened. 'glass': frosted fog over a time-smoothed copy (colours drift slowly);
     // 'dim': dark veil. smoothMs: time constant of the colour smoothing. Not part of Profile (frozen contract).
     appearance: { flashStyle: 'glass', smoothMs: 900 },
+    // One switch per trigger beyond plain flashing. Not part of Profile (frozen contract).
+    sensory: {
+      colorFlicker: true, // red <-> blue colour flicker (red flashes follow profile.flash.detectRed)
+      brightness: true, // sudden jumps to a bright screen: eased in
+      constantMotion: false, // any region that keeps moving (also slows videos): opt-in
+      // sound of what is playing (system volume is turned down, never up)
+      loudLimiter: true, // sudden loud sounds: jump scares, shouting, alarms
+      loudLeveling: false, // keep loudness even between content (quiet video, then a loud ad): opt-in
+      softStart: true, // sound that starts by itself after silence (autoplay) is eased in
+    },
   };
 }
 
@@ -55,10 +65,13 @@ export function defaultSettings() {
  * Bring saved settings from an older version up to date: take the new default numbers but keep the
  * user's own choices (on/off, active profile, appearance, typed triggers).
  */
+/** current keys only (removed switches are dropped), saved values where they exist */
+const pick = (fresh, saved = {}) => Object.fromEntries(Object.keys(fresh).map((k) => [k, k in saved ? saved[k] : fresh[k]]));
+
 export function migrateSettings(saved) {
   const fresh = defaultSettings();
   if (!saved || typeof saved !== 'object') return fresh;
-  if (saved.version === SETTINGS_VERSION) return { ...fresh, ...saved };
+  if (saved.version === SETTINGS_VERSION) return { ...fresh, ...saved, sensory: pick(fresh.sensory, saved.sensory) };
   const profiles = structuredClone(fresh.profiles);
   for (const [id, p] of Object.entries(saved.profiles ?? {})) {
     if (!profiles[id]) profiles[id] = p;
@@ -70,6 +83,7 @@ export function migrateSettings(saved) {
     // the profile picker is hidden while the app is flash-only: everyone uses Photosensitive
     activeProfileId: fresh.activeProfileId,
     appearance: { ...fresh.appearance, ...saved.appearance },
+    sensory: pick(fresh.sensory, saved.sensory),
     profiles,
   };
 }

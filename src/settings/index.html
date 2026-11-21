@@ -17,7 +17,7 @@
         </svg>
         <div>
           <h1>Sensory Shield</h1>
-          <p class="tagline">Softens flashing on your screen. Everything stays on this device.</p>
+          <p class="tagline">Softens flashing, glare, motion and loud sound. Everything stays on this device.</p>
         </div>
       </div>
     </header>
@@ -44,13 +44,16 @@
         </div>
       </section>
 
-      <section class="card" aria-labelledby="flash-title">
-        <div class="section-head">
-          <h2 id="flash-title">Flashing</h2>
-          <button id="flash-enabled" class="switch" role="switch" aria-checked="false" aria-label="Flash protection"><span></span></button>
-        </div>
+      <section class="card" aria-labelledby="triggers-title">
+        <h2 id="triggers-title">Soften these</h2>
+        <p class="hint">Mix and match: each switch works on its own.</p>
+        <div id="triggers"></div>
+      </section>
+
+      <section class="card" aria-labelledby="look-title">
+        <h2 id="look-title">Look</h2>
         <div class="field">
-          <span class="label" id="style-label">Softening style</span>
+          <span class="label" id="style-label">Flashing is softened with</span>
           <div id="flash-style" class="segmented two" role="radiogroup" aria-labelledby="style-label">
             <button role="radio" data-value="glass">Glass fog</button>
             <button role="radio" data-value="dim">Dim</button>
@@ -65,11 +68,6 @@
           <label for="dim">Dim level <output id="dim-out" for="dim"></output></label>
           <input id="dim" type="range" min="40" max="97" step="1" />
         </div>
-        <label class="check"><input id="red" type="checkbox" /> Also watch for saturated red flashes</label>
-      </section>
-
-      <section class="card" aria-labelledby="look-title">
-        <h2 id="look-title">Appearance</h2>
         <div class="field">
           <label for="fade">Fade time <output id="fade-out" for="fade"></output></label>
           <input id="fade" type="range" min="0" max="1200" step="50" />

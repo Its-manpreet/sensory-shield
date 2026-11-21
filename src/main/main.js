@@ -3,6 +3,11 @@ import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, screen, sessio
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings } from './settings-file.js';
+import { createVolumeControl } from './volume.js';
+
+// System audio capture ("loopback") for sound protection. Windows supports it out of the box; on macOS
+// Chromium has it behind these features (ScreenCaptureKit, macOS 13+). No extra install either way.
+app.commandLine.appendSwitch('enable-features', 'MacLoopbackAudioForScreenShare,MacSckSystemAudioLoopbackOverride');
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(here, '..');
@@ -20,6 +25,7 @@ let settingsWin = null;
 let tray = null;
 let lastStats = null;
 let revealUntil = 0;
+let volume = null; // created when the app is ready (macOS: system volume control)
 
 /** reveal hotkey: show everything for REVEAL_MS; pressing it again while revealed ends the reveal early */
 function toggleReveal() {
@@ -100,6 +106,7 @@ function openSettings() {
 }
 
 function setEnabled(enabled) {
+  if (!enabled) volume?.restore();
   settings = { ...settings, enabled };
   saveSettings(settings);
   broadcast('shield:toggle', { enabled });
@@ -138,6 +145,7 @@ function createTray() {
 function registerIpc() {
   ipcMain.handle('settings:get', () => settings);
   ipcMain.handle('settings:set', (_e, patch) => {
+    if (patch.enabled === false) volume?.restore();
     settings = { ...settings, ...patch };
     saveSettings(settings);
     broadcast('settings:changed', settings);
@@ -151,6 +159,10 @@ function registerIpc() {
   ipcMain.on('shield:relaunch', () => {
     app.relaunch();
     app.exit(0);
+  });
+  // sound protection: the overlay decides how far below the user's volume to go; main applies it
+  ipcMain.on('audio:gain', (_e, { gainDb }) => {
+    if (settings.enabled) volume?.applyGain(gainDb);
   });
   ipcMain.on('shield:stats', (_e, stats) => {
     lastStats = stats; // counts only, never pixels
@@ -183,7 +195,9 @@ function registerCaptureHandler() {
       const primaryId = String(screen.getPrimaryDisplay().id);
       const source = sources.find((s) => s.display_id === primaryId) ?? sources[0];
       if (!source) throw new Error('no screen sources (screen recording permission?)');
-      cb({ video: source });
+      // the overlay asks for audio too: the sound of whatever is playing, for sound protection
+      const loopback = _req.audioRequested && (process.platform === 'darwin' || process.platform === 'win32');
+      cb(loopback ? { video: source, audio: 'loopback' } : { video: source });
     } catch (err) {
       console.error(`[main] screen capture unavailable (screen access: ${screenAccess()}): ${err?.message ?? err}`);
       try {
@@ -197,6 +211,7 @@ app.whenReady().then(() => {
   settings = loadSettings();
   lockDownNetwork();
   registerCaptureHandler();
+  volume = createVolumeControl();
   registerIpc();
   createOverlay();
   createTray();
@@ -205,9 +220,12 @@ app.whenReady().then(() => {
   globalShortcut.register(HOTKEYS.settings, openSettings);
   openSettings(); // the window is the app's face; closing it leaves the shield running in the tray
   if (SELFTEST) {
-    setTimeout(() => app.quit(), SPIKE ? 9000 : 6000);
+    setTimeout(() => app.quit(), SPIKE ? 9000 : Number(process.env.SHIELD_SELFTEST_MS) || 6000);
   }
 });
 
-app.on('will-quit', () => globalShortcut.unregisterAll());
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll();
+  volume?.stop(); // puts the user's own volume back
+});
 app.on('window-all-closed', () => {}); // keep running in the tray

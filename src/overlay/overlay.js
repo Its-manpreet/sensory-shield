@@ -1,11 +1,16 @@
-// OWNER: Agent A. Overlay renderer: capture -> flash detector (every frame) -> regions -> effects.
-// Frames live in memory only. (Content detection is removed for now; see git tag vision-v1.)
+// OWNER: Agent A. Overlay renderer: capture -> sensory detectors -> regions -> effects. Frames live in memory only.
+//   every frame: flashes + red/colour flicker and brightness jumps (64x36), constant motion (96x54)
+//   every 50 ms: loudness of the sound playing (system audio) -> system volume turned down when needed
+// (Content detection is removed for now; see git tag vision-v1.)
 import { createFlashDetector } from '../engine/flash.js';
+import { createBrightnessGuard } from '../engine/brightness.js';
+import { createMotionDetector } from '../engine/motion.js';
+import { createLoudnessGuard } from '../engine/loudness.js';
 import { activeProfile } from '../shared/profiles.js';
 import { getSettings, onChange } from '../shared/store.js';
 import { createEffects } from './effects.js';
-import { toRegions } from './regions.js';
-import { startCapture, createSampler } from './capture.js';
+import { toRegions, sensoryRegions } from './regions.js';
+import { startCapture, createSampler, createSoundMeter } from './capture.js';
 
 const video = /** @type {HTMLVideoElement} */ (document.getElementById('capture'));
 const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById('fx'));
@@ -18,15 +23,20 @@ let settings = await getSettings();
 let profile = activeProfile(settings);
 const effects = createEffects(canvas, video, { fadeMs: profile.response.fadeMs, ...settings.appearance });
 effects.setLabelsVisible(profile.response.showLabel);
-let flash = createFlashDetector({ ...profile.flash });
+const flashConfig = (p, s) => ({ ...p.flash, colorFlicker: s.sensory?.colorFlicker ?? true });
+let flash = createFlashDetector(flashConfig(profile, settings));
+const brightness = createBrightnessGuard();
+const motion = createMotionDetector();
 const sampler = createSampler(video);
 let captureState = 'starting'; // 'starting' | 'ok' | 'denied'
 
 function applySettings(s) {
-  const prevFlash = JSON.stringify(profile.flash);
+  const prevFlash = JSON.stringify(flashConfig(profile, settings));
   settings = s;
   profile = activeProfile(s);
-  if (JSON.stringify(profile.flash) !== prevFlash) flash = createFlashDetector({ ...profile.flash });
+  if (JSON.stringify(flashConfig(profile, s)) !== prevFlash) flash = createFlashDetector(flashConfig(profile, s));
+  if (!s.sensory?.constantMotion) motion.reset();
+  if (!s.sensory?.brightness) brightness.reset();
   effects.setStyle({ fadeMs: profile.response.fadeMs, ...s.appearance });
   effects.setLabelsVisible(profile.response.showLabel);
   if (!s.enabled) effects.clear();
@@ -36,7 +46,7 @@ window.shield?.onReveal(({ ms }) => effects.revealAll(ms));
 window.shield?.onToggle(({ enabled }) => applySettings({ ...settings, enabled }));
 
 // --- stats (counts only) ---
-const stats = { frames: 0, flashMs: 0, since: performance.now() };
+const stats = { frames: 0, flashMs: 0, engineMs: 0, since: performance.now() };
 setInterval(() => {
   const now = performance.now();
   const secs = (now - stats.since) / 1000;
@@ -47,6 +57,9 @@ setInterval(() => {
     modelHz: 0,
     device: 'off',
     capture: captureState,
+    sound: soundState, // 'off' | 'on' | 'unavailable'
+    soundCutDb: lastGainDb, // how far below the user's volume right now (0 = untouched)
+    engineMs: stats.frames ? stats.engineMs / stats.frames : 0, // all sensory detectors, per frame
   };
   window.shield?.sendStats(out);
   if (selftest) log('stats', JSON.stringify(out));
@@ -55,7 +68,7 @@ setInterval(() => {
     const d = flash.diagnostics();
     log(`flash fps=${out.fps.toFixed(0)} maxFlashes/s=${d.maxFlashes} flashingArea=${(100 * d.maxFlashingFraction).toFixed(1)}% (needs ${100 * d.minAreaFraction}%) motion=${(100 * d.movingShare).toFixed(0)}% regions=${flashEvents.length}`);
   }
-  Object.assign(stats, { frames: 0, flashMs: 0, since: now });
+  Object.assign(stats, { frames: 0, flashMs: 0, engineMs: 0, since: now });
 }, 1000);
 
 // --- per-frame loop ---
@@ -72,9 +85,18 @@ function onFrame(now) {
   stats.frames++;
   const data = sampler.sample();
   const t0 = performance.now();
-  flashEvents = profile.flash.enabled ? flash.push({ data, tMs: now }) : [];
+  const frame = { data, tMs: now };
+  const sens = settings.sensory ?? {};
+  // one detector serves three independent switches: flashing, red flashes, red/blue colour flicker
+  const flashOn = profile.flash.enabled || profile.flash.detectRed || sens.colorFlicker;
+  flashEvents = flashOn ? flash.push(frame) : [];
   stats.flashMs += performance.now() - t0;
-  lastRegions = toRegions(flashEvents, profile);
+  // a single jump is the brightness guard's job; repeated jumps are flashing, already softened by the glass
+  const overlapsFlash = (r) => flashEvents.some((f) => r.x < f.rect.x + f.rect.w && f.rect.x < r.x + r.w && r.y < f.rect.y + f.rect.h && f.rect.y < r.y + r.h);
+  const bright = sens.brightness ? brightness.push(frame).filter((b) => !overlapsFlash(b.rect)) : [];
+  const moving = sens.constantMotion ? motion.push({ data: sampler.sampleMotion(), tMs: now }) : [];
+  stats.engineMs += performance.now() - t0;
+  lastRegions = [...toRegions(flashEvents, profile, sens), ...sensoryRegions({ brightness: bright, motion: moving })];
   lastFrameAt = now;
   effects.setRegions(lastRegions, now);
 }
@@ -87,8 +109,37 @@ function onAnimationFrame(now) {
   effects.draw(now);
 }
 
+// --- sound: loudness of what is playing -> how far to turn the system volume down (main applies it) ---
+let soundState = 'off';
+let lastGainDb = 0;
+const loudnessConfig = (s) => ({ limiter: !!s.sensory?.loudLimiter, leveling: !!s.sensory?.loudLeveling, softStart: !!s.sensory?.softStart });
+let loudness = createLoudnessGuard(loudnessConfig(settings));
+let loudnessKey = JSON.stringify(loudnessConfig(settings));
+function startSound(stream) {
+  const meter = createSoundMeter(stream);
+  if (!meter) return void (soundState = 'unavailable');
+  soundState = 'on';
+  let lastSent = 0;
+  setInterval(() => {
+    const key = JSON.stringify(loudnessConfig(settings));
+    if (key !== loudnessKey) (loudness = createLoudnessGuard(loudnessConfig(settings))), (loudnessKey = key);
+    const anyOn = settings.enabled && (settings.sensory?.loudLimiter || settings.sensory?.loudLeveling || settings.sensory?.softStart);
+    const now = performance.now();
+    const levelNow = meter.levelDb();
+    const { gainDb } = anyOn ? loudness.push({ levelDb: levelNow, tMs: now }) : { gainDb: 0 };
+    // send on a real change (0.5 dB), and at least twice a second while turned down
+    if (Math.abs(gainDb - lastGainDb) >= 0.5 || (gainDb < 0 && now - lastSent > 500) || (gainDb === 0 && lastGainDb !== 0)) {
+      window.shield?.sendAudioGain(gainDb);
+      if (selftest || debug) log(`sound: level ${levelNow.toFixed(0)} dBFS -> volume ${gainDb < 0 ? `down ${(-gainDb).toFixed(1)} dB` : 'back to yours'}`);
+      lastSent = now;
+      lastGainDb = gainDb;
+    }
+  }, 50);
+}
+
 try {
-  await startCapture(video);
+  const stream = await startCapture(video);
+  startSound(stream);
   captureState = 'ok';
   log(`capture started ${video.videoWidth}x${video.videoHeight}, window ${innerWidth}x${innerHeight} @${devicePixelRatio}x`);
   video.requestVideoFrameCallback(onFrame);

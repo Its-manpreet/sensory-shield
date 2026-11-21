@@ -1,4 +1,4 @@
-// OWNER: Agent D. Settings window: flash protection settings and appearance, live status.
+// OWNER: Agent D. Settings window: one independent switch per sensory trigger, the look, live status.
 // (Profile picker and content blocklist are removed for now; see git tag vision-v1.)
 // Every change is saved immediately and the overlay applies it without a restart.
 import { getSettings, setSettings, onChange } from '../shared/store.js';
@@ -6,6 +6,54 @@ import { getSettings, setSettings, onChange } from '../shared/store.js';
 const $ = (id) => document.getElementById(id);
 const shield = window.shield; // undefined when opened as a plain web page (mock store)
 
+/**
+ * Every trigger the shield can soften, each with its own switch. `get`/`set` read and write where the value
+ * lives: the active profile (frozen contract fields) or settings.sensory (everything newer).
+ */
+const TRIGGERS = [
+  { id: 'flash', name: 'Flashing', hint: 'Bright flashes three or more times a second.', get: () => profile().flash.enabled, set: (on) => patchProfile('flash', { enabled: on }) },
+  { id: 'red', name: 'Red flashes', hint: 'Saturated red flashing, which is more provocative.', get: () => profile().flash.detectRed, set: (on) => patchProfile('flash', { detectRed: on }) },
+  { id: 'colorFlicker', name: 'Red / blue colour flicker', hint: 'Colours swapping fast, even without a brightness change.', sensory: true },
+  { id: 'brightness', name: 'Sudden brightness', hint: 'A white page after a dark one, eased in over a second.', sensory: true },
+  { id: 'constantMotion', name: 'All constant motion', hint: 'Anything that keeps moving, including videos.', sensory: true },
+  { id: 'loudLimiter', group: 'Sound', name: 'Sudden loud sounds', hint: 'Jump scares, shouting, alarms: the volume dips at once, then comes back.', sensory: true },
+  { id: 'loudLeveling', group: 'Sound', name: 'Keep loudness even', hint: 'A loud ad after a quiet video is brought down to a comfortable level.', sensory: true },
+  { id: 'softStart', group: 'Sound', name: 'Sound that starts by itself', hint: 'Autoplay after silence fades in instead of blaring.', sensory: true },
+];
+const isOn = (t) => (t.sensory ? !!settings.sensory?.[t.id] : t.get());
+function setTrigger(t, on) {
+  if (t.sensory) {
+    settings = { ...settings, sensory: { ...settings.sensory, [t.id]: on } };
+    save({ sensory: settings.sensory });
+  } else t.set(on);
+}
+
+function buildTriggers() {
+  let group = 'Sight';
+  $('triggers').replaceChildren(
+    ...TRIGGERS.flatMap((t) => {
+      const head = [];
+      if ((t.group ?? 'Sight') !== group) {
+        group = t.group;
+        const h = document.createElement('h3');
+        h.className = 'group-head';
+        h.textContent = group;
+        head.push(h);
+      }
+      const row = document.createElement('div');
+      row.className = 'row-switch';
+      row.innerHTML = `<div><span class="label" id="t-${t.id}-label"></span><p class="hint"></p></div>
+        <button class="switch" role="switch" aria-checked="false" aria-labelledby="t-${t.id}-label" id="t-${t.id}"><span></span></button>`;
+      row.querySelector('.label').textContent = t.name;
+      row.querySelector('.hint').textContent = t.hint;
+      row.querySelector('button').addEventListener('click', () => {
+        setTrigger(t, !isOn(t));
+        render();
+      });
+      return [...head, row];
+    }),
+  );
+}
 const HOTKEY_LABELS = { reveal: 'Reveal for 5 s', toggle: 'Shield on / off', settings: 'Open this window' };
 
 /** @type {import('../shared/types.js').Settings} */
@@ -72,7 +120,7 @@ function renderHero() {
   let text, tone;
   if (!settings.enabled) (text = 'Paused. Nothing is being softened.'), (tone = '');
   else if (status.screenAccess === 'denied' || capture === 'denied') (text = 'Waiting for screen access'), (tone = 'warn');
-  else if (capture === 'ok') (text = 'On. Watching for flashing in every app.'), (tone = 'good');
+  else if (capture === 'ok') (text = 'On. Watching your screen in every app.'), (tone = 'good');
   else (text = 'Starting…'), (tone = '');
   el.textContent = text;
   el.dataset.tone = tone;
@@ -84,7 +132,7 @@ function render() {
   const look = settings.appearance ?? { flashStyle: 'glass', smoothMs: 900 };
   setSwitch($('enabled'), settings.enabled);
 
-  setSwitch($('flash-enabled'), p.flash.enabled);
+  for (const t of TRIGGERS) setSwitch($(`t-${t.id}`), isOn(t));
   setRadio($('flash-style'), look.flashStyle);
   $('smooth').value = look.smoothMs;
   $('smooth-out').textContent = `${(look.smoothMs / 1000).toFixed(1)} s`;
@@ -92,7 +140,6 @@ function render() {
   $('dim-field').hidden = look.flashStyle !== 'dim';
   $('dim').value = Math.round(p.response.dimLevel * 100);
   $('dim-out').textContent = `${Math.round(p.response.dimLevel * 100)}%`;
-  $('red').checked = p.flash.detectRed;
 
   $('fade').value = p.response.fadeMs;
   $('fade-out').textContent = `${p.response.fadeMs} ms`;
@@ -102,7 +149,8 @@ function render() {
 
 function renderStats(st) {
   lastStats = st;
-  $('stats').textContent = st.capture === 'ok' ? `${st.fps.toFixed(0)} fps · flash check ${st.flashMs.toFixed(2)} ms per frame` : '';
+  const sound = st.sound === 'on' ? (st.soundCutDb < -0.5 ? ` · sound turned down ${Math.round(-st.soundCutDb)} dB` : ' · listening') : st.sound === 'unavailable' ? ' · sound not available here' : '';
+  $('stats').textContent = st.capture === 'ok' ? `${st.fps.toFixed(0)} fps · all checks ${(st.engineMs ?? st.flashMs).toFixed(2)} ms per frame${sound}` : '';
   renderHero();
 }
 
@@ -112,10 +160,6 @@ $('enabled').addEventListener('click', () => {
   setSwitch($('enabled'), settings.enabled);
   renderHero();
   save({ enabled: settings.enabled });
-});
-$('flash-enabled').addEventListener('click', () => {
-  patchProfile('flash', { enabled: !profile().flash.enabled });
-  render();
 });
 radioKeys($('flash-style'), (flashStyle) => {
   settings = { ...settings, appearance: { ...settings.appearance, flashStyle } };
@@ -131,7 +175,6 @@ $('dim').addEventListener('input', (e) => {
   patchProfile('response', { dimLevel: Number(e.target.value) / 100 });
   $('dim-out').textContent = `${e.target.value}%`;
 });
-$('red').addEventListener('change', (e) => patchProfile('flash', { detectRed: e.target.checked }));
 $('fade').addEventListener('input', (e) => {
   patchProfile('response', { fadeMs: Number(e.target.value) });
   $('fade-out').textContent = `${e.target.value} ms`;
@@ -162,5 +205,6 @@ $('keys').replaceChildren(
     return [dt, dd];
   }),
 );
+buildTriggers();
 render();
 console.log(`SELFTEST settings ok: ${Object.keys(settings.profiles).length} profiles`);

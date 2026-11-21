@@ -5,10 +5,45 @@
  * @param {HTMLVideoElement} video
  */
 export async function startCapture(video) {
-  const stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false });
-  video.srcObject = stream;
+  let stream;
+  try {
+    // with the sound of whatever is playing (system loopback), for sound protection. Chromium's voice-call
+    // processing would distort loudness readings, so it is all off.
+    stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: 30 },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    });
+  } catch {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false }); // video only
+  }
+  video.srcObject = new MediaStream(stream.getVideoTracks()); // the <video> stays silent
   await video.play();
   return stream;
+}
+
+/**
+ * Loudness of the captured system audio: `levelDb()` = RMS of the last ~43 ms in dBFS. Memory only.
+ * @param {MediaStream} stream
+ */
+export function createSoundMeter(stream) {
+  const tracks = stream.getAudioTracks();
+  if (!tracks.length) return null;
+  const ac = new AudioContext();
+  const an = ac.createAnalyser();
+  an.fftSize = 2048;
+  ac.createMediaStreamSource(new MediaStream(tracks)).connect(an); // analysed only, never played back
+  const buf = new Float32Array(an.fftSize);
+  return {
+    levelDb() {
+      an.getFloatTimeDomainData(buf);
+      let s = 0;
+      for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i];
+      return 10 * Math.log10(s / buf.length + 1e-12);
+    },
+    close() {
+      ac.close();
+    },
+  };
 }
 
 /**
@@ -25,7 +60,16 @@ export function createSampler(video, { gridW = 64, gridH = 36 } = {}) {
   mctx.imageSmoothingQuality = 'high';
   ctx.imageSmoothingQuality = 'high';
 
+  const motionCanvas = new OffscreenCanvas(96, 54); // finer grid for the motion detector
+  const mo = /** @type {OffscreenCanvasRenderingContext2D} */ (motionCanvas.getContext('2d', { willReadFrequently: true }));
+  mo.imageSmoothingQuality = 'high';
+
   return {
+    /** RGBA 96x54 of the latest sample (motion detector; call after sample()) */
+    sampleMotion() {
+      mo.drawImage(mid, 0, 0, 96, 54);
+      return mo.getImageData(0, 0, 96, 54).data;
+    },
     /** @returns {Uint8ClampedArray} RGBA gridW*gridH*4 of the latest frame */
     sample() {
       mctx.drawImage(video, 0, 0, mid.width, mid.height);

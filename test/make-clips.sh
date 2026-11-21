@@ -13,5 +13,8 @@ flash() { # $1 hz  $2 colour  $3 name
 flash 3 white flash-3hz
 flash 6 white flash-6hz
 flash 4 red   red-flash-4hz
+# red <-> blue colour flicker with little brightness change (colour flicker detector)
+ffmpeg -f lavfi -i "color=c=0x6450b4:s=$S:r=30:d=$D" \
+  -vf "drawbox=c=0xb45064:t=fill:enable='lt(mod(t\,1/5)\,1/10)'" $ENC "FLASH-WARNING-redblue-5hz.webm"
 ffmpeg -f lavfi -i "gradients=s=$S:r=30:d=$D:speed=0.02" $ENC normal-video.webm
 ls -la

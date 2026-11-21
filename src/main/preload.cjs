@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('shield', {
   onToggle: (cb) => listen('shield:toggle', cb),
   onReveal: (cb) => listen('shield:reveal', cb),
   sendStats: (stats) => ipcRenderer.send('shield:stats', stats),
+  sendAudioGain: (gainDb, reason) => ipcRenderer.send('audio:gain', { gainDb, reason }),
   onStats: (cb) => listen('shield:stats', cb), // settings window status line (main re-broadcasts)
   getStatus: () => ipcRenderer.invoke('shield:status'),
   openPermission: () => ipcRenderer.send('shield:open-permission'),

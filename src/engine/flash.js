@@ -24,12 +24,16 @@ export const DEFAULT_FLASH_CONFIG = Object.freeze({
   minAreaFraction: 0.25,
   holdMs: 1500,
   detectRed: true,
+  colorFlicker: true, // additive (not in the frozen contract): red <-> blue colour flicker, reported as kind 'red'
 });
 
 const LUM_DELTA = 0.1; // WCAG: change of 10% of max relative luminance
 const LUM_DARK_MAX = 0.8; // WCAG: darker state must be below 0.80
 const RED_DELTA = 20; // WCAG red flash: (R-G-B)*320 changes by more than 20
 const RED_SATURATION = 0.8; // WCAG: R/(R+G+B) >= 0.8
+// Red <-> blue colour flicker (described as especially provocative) can have almost no brightness change and
+// colours not saturated enough for the WCAG red rule. Tracked on r - b in linear light: a swing of 0.25 counts.
+const CHROMA_DELTA = 0.25;
 const WINDOW_MS = 1000;
 const EARLY_TRANSITIONS = 4; // early trigger after 2 full flashes at a dangerous rate
 const EARLY_TOLERANCE = 1.1; // allow 10% timing jitter from frame capture
@@ -163,10 +167,11 @@ function createTracker(n, delta, darkMax) {
  */
 export function createFlashDetector(config = {}) {
   const cfg = { ...DEFAULT_FLASH_CONFIG, ...config };
-  const { gridW, gridH, regionsX, regionsY, maxFlashesPerSec, minAreaFraction, holdMs, detectRed } = cfg;
+  const { gridW, gridH, regionsX, regionsY, maxFlashesPerSec, minAreaFraction, holdMs, detectRed, colorFlicker } = cfg;
   const n = gridW * gridH;
   const lum = createTracker(n, LUM_DELTA, LUM_DARK_MAX);
   const red = createTracker(n, RED_DELTA, Infinity);
+  const chroma = createTracker(n, CHROMA_DELTA, Infinity);
   const nRegions = regionsX * regionsY;
   const cellRegion = new Uint16Array(n);
   for (let y = 0; y < gridH; y++) {
@@ -180,6 +185,14 @@ export function createFlashDetector(config = {}) {
   // motion: previous frame luminance and per-block "moving until" time
   const cur = new Float32Array(n);
   const prev = new Float32Array(n);
+  // Slow scrolling (under ~half a cell per frame, e.g. 300 px/s) is too small to match frame to frame, yet a
+  // list of white cards on a dark page still makes every cell blink. Blocks no 1-frame shift explains are
+  // also matched against the frame SLOW_STRIDE frames back, where the same motion is a whole cell or more.
+  const SLOW_STRIDE = 3;
+  const history = Array.from({ length: SLOW_STRIDE }, () => new Float32Array(n)); // ring of older frames
+  let historyPos = 0, historyFill = 0;
+  let ref = prev; // the frame blockDiff / blockResidual compare against
+  const lastSlowT = new Float64Array(Math.max(1, Math.round(gridW / BLOCK_W)) * Math.max(1, Math.round(gridH / BLOCK_H))).fill(-Infinity);
   let havePrev = false;
   const blocksX = Math.max(1, Math.round(gridW / BLOCK_W));
   const blocksY = Math.max(1, Math.round(gridH / BLOCK_H));
@@ -206,7 +219,7 @@ export function createFlashDetector(config = {}) {
       for (let x = x0; x < x1; x++) {
         const px = x + dx;
         if (px < 0 || px >= gridW) continue;
-        sum += Math.abs(cur[row + x] - prev[prow + px]);
+        sum += Math.abs(cur[row + x] - ref[prow + px]);
         count++;
       }
       if (sum > limit * (x1 - x0) * (y1 - y0)) return Infinity; // already worse than the best: stop early
@@ -219,7 +232,7 @@ export function createFlashDetector(config = {}) {
     let sum = 0, count = 0;
     for (let y = Math.max(y0, -dy); y < Math.min(y1, gridH - dy); y++) {
       for (let x = Math.max(x0, -dx); x < Math.min(x1, gridW - dx); x++) {
-        sum += cur[y * gridW + x] - prev[(y + dy) * gridW + x + dx];
+        sum += cur[y * gridW + x] - ref[(y + dy) * gridW + x + dx];
         count++;
       }
     }
@@ -238,6 +251,36 @@ export function createFlashDetector(config = {}) {
       }
     }
     return sum / count;
+  }
+
+  /**
+   * Is this block slowly moving? Same tests as the frame-to-frame check (a shift explains most of the change,
+   * the block has the structure for it, the mean brightness did not change), against SLOW_STRIDE frames back,
+   * confirmed by a second slow match within MOTION_CONFIRM_MS. A flash at any rate fails the brightness test.
+   */
+  function slowMotion(b, x0, y0, x1, y1, grad, t) {
+    if (historyFill < SLOW_STRIDE) return false;
+    ref = history[historyPos]; // the oldest kept frame: SLOW_STRIDE frames back
+    try {
+      const d0 = blockDiff(x0, y0, x1, y1, 0, 0, Infinity);
+      if (d0 < MOTION_MIN_CHANGE) return false;
+      let best = Infinity, bdx = 0, bdy = 0;
+      for (let dy = -MAX_DY; dy <= MAX_DY; dy++) {
+        for (let dx = -MAX_DX; dx <= MAX_DX; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const d = blockDiff(x0, y0, x1, y1, dx, dy, Math.min(best, d0 * MOTION_RATIO));
+          if (d < best) (best = d), (bdx = dx), (bdy = dy);
+        }
+      }
+      const explainable = d0 <= (Math.max(Math.abs(bdx), Math.abs(bdy)) + 1) * grad * MOTION_GRADIENT_SLACK;
+      if (!(best <= d0 * MOTION_RATIO && explainable)) return false;
+      if (Math.abs(blockResidual(x0, y0, x1, y1, bdx, bdy)) >= MOTION_MAX_RESIDUAL) return false;
+      const confirmed = t - lastSlowT[b] <= MOTION_CONFIRM_MS;
+      lastSlowT[b] = t;
+      return confirmed;
+    } finally {
+      ref = prev;
+    }
   }
 
   function updateMotion(t) {
@@ -267,6 +310,10 @@ export function createFlashDetector(config = {}) {
         }
         const explainable = d0 <= (Math.max(Math.abs(bdx), Math.abs(bdy)) + 1) * grad * MOTION_GRADIENT_SLACK;
         if (!(best <= d0 * MOTION_RATIO && explainable)) {
+          if (slowMotion(b, x0, y0, x1, y1, grad, t)) {
+            movingUntil[b] = t + MOTION_HOLD_MS;
+            continue;
+          }
           unexplained.push([b, x0, y0, x1, y1]);
           continue;
         }
@@ -345,11 +392,14 @@ export function createFlashDetector(config = {}) {
     for (let i = 0, p = 0; i < n; i++, p += 4) {
       const notMoving = t >= movingUntil[cellBlock[i]]; // motion (scrolling) transitions are not counted
       lum.step(i, cur[i], t, notMoving);
-      if (detectRed) {
+      if (detectRed || colorFlicker) {
         const r = LINEAR[data[p]], g = LINEAR[data[p + 1]], b = LINEAR[data[p + 2]];
-        const sum = r + g + b;
-        const redValue = sum > 0 && r / sum >= RED_SATURATION ? Math.max(0, (r - g - b) * 320) : 0;
-        red.step(i, redValue, t, notMoving);
+        if (detectRed) {
+          const sum = r + g + b;
+          const redValue = sum > 0 && r / sum >= RED_SATURATION ? Math.max(0, (r - g - b) * 320) : 0;
+          red.step(i, redValue, t, notMoving);
+        }
+        if (colorFlicker) chroma.step(i, r - b, t, notMoving);
       }
 
       if (still[cellRegion[i]]) continue; // nothing in this region moved for STILL_MS: not flashing
@@ -363,6 +413,11 @@ export function createFlashDetector(config = {}) {
         let fr = red.flashes(i, t);
         if (fr < maxFlashesPerSec && red.fastRate(i, t, EARLY_TRANSITIONS, maxFlashesPerSec)) fr = maxFlashesPerSec;
         if (fr >= maxFlashesPerSec && fr >= f) (f = fr), (isRed = true);
+      }
+      if (colorFlicker && chroma.recent(i, t)) {
+        let fc = chroma.flashes(i, t);
+        if (fc < maxFlashesPerSec && chroma.fastRate(i, t, EARLY_TRANSITIONS, maxFlashesPerSec)) fc = maxFlashesPerSec;
+        if (fc >= maxFlashesPerSec && fc >= f) (f = fc), (isRed = true);
       }
       if (f < maxFlashesPerSec) continue;
 
@@ -379,6 +434,12 @@ export function createFlashDetector(config = {}) {
       if (isRed) redCells[reg]++;
     }
 
+    // keep the frame from SLOW_STRIDE frames back: overwrite the oldest slot with the frame that is now `prev`
+    if (havePrev) {
+      history[historyPos].set(prev);
+      historyPos = (historyPos + 1) % SLOW_STRIDE;
+      historyFill = Math.min(SLOW_STRIDE, historyFill + 1);
+    }
     prev.set(cur);
     havePrev = true;
     dbg.pushes++;
@@ -429,7 +490,10 @@ export function createFlashDetector(config = {}) {
     reset() {
       lum.reset();
       red.reset();
+      chroma.reset();
       havePrev = false;
+      historyFill = 0;
+      lastSlowT.fill(-Infinity);
       lastChange.fill(-Infinity);
       longestGap.fill(STILL_MS);
       movingUntil.fill(0);

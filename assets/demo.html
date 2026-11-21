@@ -1,0 +1,137 @@
+<!doctype html>
+<!-- OWNER: Agent D. Trigger gallery for live demos: one panel per sensory trigger. This page does NOT protect
+     anything itself: run Sensory Shield, open this page (npm run demo -> http://localhost:8765/assets/demo.html)
+     and watch the app soften each panel. Every potentially provocative panel starts hidden. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sensory Shield: trigger gallery</title>
+    <style>
+      :root {
+        --bg: #f4f5f2; --panel: #fff; --ink: #1d2126; --muted: #5d6670; --line: #dde1e4; --accent: #2f6f64;
+        --warn-bg: #fff4dc; --warn-ink: #6b4a00;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg: #15181b; --panel: #1e2226; --ink: #e8eaec; --muted: #9aa3ab; --line: #30363b; --accent: #7cc4b5;
+                --warn-bg: #3a2f17; --warn-ink: #f3d79b; }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+      main { max-width: 980px; margin: 0 auto; padding: 32px 16px 64px; }
+      h1 { font-size: 28px; margin: 0 0 4px; }
+      .sub { color: var(--muted); margin: 0 0 18px; }
+      .warn { background: var(--warn-bg); color: var(--warn-ink); border-radius: 12px; padding: 14px 16px; margin-bottom: 22px; }
+      .warn label { display: flex; gap: 10px; align-items: center; margin-top: 8px; font-weight: 600; }
+      .grid { display: grid; grid-template-columns: 1fr; gap: 16px; } /* one wide column: each stage covers a realistic share of the screen */
+      @media (max-width: 520px) { .grid { grid-template-columns: 1fr; } }
+      .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
+      .panel h2 { font-size: 17px; margin: 0; }
+      .panel p { color: var(--muted); margin: 2px 0 10px; font-size: 14px; }
+      .stage { position: relative; aspect-ratio: 16 / 10; border-radius: 10px; overflow: hidden; background: #0e1012; display: grid; place-items: center; color: #8a939b; font-size: 14px; }
+      .stage > * { position: absolute; inset: 0; width: 100%; height: 100%; }
+      .stage .idle { position: static; width: auto; height: auto; }
+      .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      button { font: inherit; font-size: 14px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 7px 14px; border-radius: 999px; cursor: pointer; }
+      button[aria-pressed="true"] { background: var(--accent); color: var(--panel); border-color: var(--accent); }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+      .foot { color: var(--muted); font-size: 14px; margin-top: 24px; }
+      [hidden] { display: none !important; }
+      /* constant motion */
+      .drift { background: radial-gradient(circle at 30% 40%, #e07a5f 0 50px, transparent 51px), radial-gradient(circle at 70% 60%, #81b29a 0 60px, transparent 61px), radial-gradient(circle at 50% 20%, #f2cc8f 0 34px, transparent 35px), #3d405b; background-size: 320px 240px; animation: drift 6s linear infinite; }
+      @keyframes drift { to { background-position: 640px 240px, -640px -240px, 320px 480px, 0 0; } }
+      @media (prefers-reduced-motion: reduce) { .drift { animation-duration: 6s; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Sensory Shield: trigger gallery</h1>
+      <p class="sub">Each panel shows one kind of visual trigger. For sound, play any video with a sudden loud moment. Run Sensory Shield and watch it soften them. This page itself protects nothing.</p>
+
+      <div class="warn" role="alert">
+        <strong>Warning:</strong> some panels flash or flicker, which can trigger seizures or migraines.
+        Every panel starts hidden. Warn anyone nearby before you start one.
+        <label><input type="checkbox" id="consent" /> I understand. Enable the panels.</label>
+      </div>
+
+      <div class="grid">
+        <section class="panel" aria-labelledby="h-flash">
+          <h2 id="h-flash">Flashing</h2>
+          <p>Black/white flashing at 6 per second. Expected: frosted glass within about a third of a second.</p>
+          <div class="stage" data-stage="flash"><span class="idle">Hidden</span></div>
+          <div class="controls"><button data-show="flash" data-clip="clips/FLASH-WARNING-flash-6hz.webm" disabled>Play</button></div>
+        </section>
+
+        <section class="panel" aria-labelledby="h-rb">
+          <h2 id="h-rb">Red / blue colour flicker</h2>
+          <p>Red and blue swapping 5 times a second, with little brightness change. Expected: glass with the colour drained out.</p>
+          <div class="stage" data-stage="rb"><span class="idle">Hidden</span></div>
+          <div class="controls"><button data-show="rb" data-clip="clips/FLASH-WARNING-redblue-5hz.webm" disabled>Play</button></div>
+        </section>
+
+        <section class="panel" aria-labelledby="h-bright">
+          <h2 id="h-bright">Sudden brightness</h2>
+          <p>The whole page goes dark, then jumps to white. Expected: the white is eased in over about a second.</p>
+          <div class="stage" data-stage="bright"><span class="idle">Uses the whole window</span></div>
+          <div class="controls"><button data-show="bright" disabled>Dark, then white</button></div>
+        </section>
+
+        <section class="panel" aria-labelledby="h-drift">
+          <h2 id="h-drift">Constant motion</h2>
+          <p>Shapes that never stop drifting. Expected: calmed only when "All constant motion" is on in settings.</p>
+          <div class="stage" data-stage="drift"><span class="idle">Hidden</span></div>
+          <div class="controls"><button data-show="drift" disabled>Start</button></div>
+        </section>
+      </div>
+      <p class="foot">Reduces exposure to known triggers; it is not a medical device. Panels stop by themselves after 15 seconds. Press a button again to stop.</p>
+    </main>
+    <div id="full" hidden style="position:fixed;inset:0;z-index:10;background:#000"></div>
+
+    <script type="module">
+      const $$ = (s) => [...document.querySelectorAll(s)];
+      const stage = (k) => document.querySelector(`[data-stage="${k}"]`);
+      const timers = {};
+      document.getElementById('consent').addEventListener('change', (e) => {
+        for (const b of $$('[data-show]')) b.disabled = !e.target.checked;
+        if (!e.target.checked) for (const k of Object.keys(timers)) stop(k);
+      });
+
+      function stop(k) {
+        clearTimeout(timers[k]);
+        clearInterval(timers[k + 'i']);
+        cancelAnimationFrame(timers[k + 'r']);
+        delete timers[k];
+        if (k === 'bright') document.getElementById('full').hidden = true; // the full-window test layer
+        const s = stage(k);
+        s.replaceChildren(Object.assign(document.createElement('span'), { className: 'idle', textContent: 'Hidden' }));
+        for (const b of $$(`[data-show="${k}"]`)) b.setAttribute('aria-pressed', 'false');
+      }
+
+      function start(k, button) {
+        const wasOn = button.getAttribute('aria-pressed') === 'true';
+        stop(k);
+        if (wasOn) return;
+        button.setAttribute('aria-pressed', 'true');
+        const s = stage(k);
+        if (button.dataset.clip) {
+          const v = Object.assign(document.createElement('video'), { src: button.dataset.clip, muted: true, loop: true, playsInline: true });
+          s.replaceChildren(v);
+          v.play();
+        } else if (k === 'bright') {
+          const full = document.getElementById('full');
+          full.hidden = false;
+          full.style.background = '#000';
+          timers[k + 'i'] = setTimeout(() => (full.style.background = '#fff'), 1500); // cleared by stop() too
+          timers[k] = setTimeout(() => stop(k), 4000);
+          return;
+        } else if (k === 'drift') {
+          s.replaceChildren(Object.assign(document.createElement('div'), { className: 'drift' }));
+        }
+        timers[k] = setTimeout(() => stop(k), 15000);
+      }
+
+      for (const b of $$('[data-show]')) b.addEventListener('click', () => start(b.dataset.show, b));
+    </script>
+  </body>
+</html>

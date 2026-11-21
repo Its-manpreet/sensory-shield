@@ -175,3 +175,29 @@ test('settings migration: new default numbers, user choices kept', async () => {
   assert.deepEqual(s.profiles.custom.content.customTriggers, ['spiders']);
   assert.equal(s.profiles.custom.flash.minAreaFraction, 0.15);
 });
+
+test('red <-> blue colour flicker with almost no brightness change: detected as red, off when disabled', () => {
+  // (180,80,100) <-> (100,80,180): luminance swing ~0.05 (below 0.1) and red not saturated enough for WCAG red
+  const gen = () => frames({ seconds: 2, pixel: (_x, _y, t) => (Math.floor((t / 1000) * 10) % 2 ? [180, 80, 100] : [100, 80, 180]) });
+  const hit = firstActive(run(createFlashDetector(), gen()));
+  assert.ok(hit && hit.tMs <= 1000, `first ${hit?.tMs}`);
+  assert.ok(hit.events.every((e) => e.kind === 'red'));
+  assert.equal(anyEvents(run(createFlashDetector({ colorFlicker: false, detectRed: false }), gen())), false);
+});
+
+test('slow colour changes (a sunset fading red to blue over 3 s) are not flicker', () => {
+  const gen = frames({ seconds: 3, pixel: (_x, _y, t) => { const k = t / 3000; return [200 - 120 * k, 80, 80 + 120 * k]; } });
+  assert.equal(anyEvents(run(createFlashDetector(), gen)), false);
+});
+
+test('slow scrolling of white cards on a dark page (dark-mode feed, 300 px/s) is not flashing', () => {
+  // cards 140 px tall with 18 px dark gaps on a 956 px screen; under half a grid cell per frame
+  const card = 140 / 956, gap = 18 / 956;
+  for (const pxs of [200, 300, 450]) {
+    const gen = frames({ seconds: 3, ss: 4, pixel: (x, y, t) => {
+      const yy = (y + (t / 1000) * (pxs / 956)) % (card + gap);
+      return x > 0.27 && x < 0.73 && yy < card ? [245, 245, 245] : [20, 24, 30];
+    } });
+    assert.equal(anyEvents(run(createFlashDetector({ minAreaFraction: 0.1 }), gen)), false, `${pxs} px/s`);
+  }
+});
