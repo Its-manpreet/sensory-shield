@@ -29,8 +29,6 @@ export function createEffects(canvas, video, opts = {}) {
   let smoothMs = opts.smoothMs ?? 900;
   let labelsVisible = true;
   let revealUntil = 0;
-  let cursor = null; // normalized {x, y} while "clear around cursor" is on
-  let peekRadius = opts.peekRadius ?? 0; // CSS px
   let lastDraw = performance.now();
   /** @type {Map<string, {region: Region, alpha: number, seenAt: number, frozen: HTMLCanvasElement|null}>} */
   const live = new Map();
@@ -250,20 +248,6 @@ export function createEffects(canvas, video, opts = {}) {
       } else if (effect === 'freeze') drawFreeze(e, e.alpha);
       else (flashStyle === 'glass' ? glass : dims).push(e);
     }
-    // "clear around cursor": a soft round window through CONTENT blurs only. Flash protection is drawn after
-    // this on purpose and never opened: peeking at flashing is exactly what it protects against.
-    if (cursor && peekRadius > 0 && live.size) {
-      const dpr = devicePixelRatio;
-      const cx = cursor.x * canvas.width, cy = cursor.y * canvas.height, r = peekRadius * dpr;
-      const g = ctx.createRadialGradient(cx, cy, r * 0.55, cx, cy, r);
-      g.addColorStop(0, 'rgba(0,0,0,1)');
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      ctx.save();
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.fillStyle = g;
-      ctx.fillRect(cx - r, cy - r, 2 * r, 2 * r);
-      ctx.restore();
-    }
     drawDims(dims);
     const panel = drawFlashGlass(glass);
     if (labelsVisible) {
@@ -299,13 +283,8 @@ export function createEffects(canvas, video, opts = {}) {
     },
     // additions beyond the contract, used by overlay.js
     draw,
-    /** @param {{x:number, y:number} | null} p  normalized cursor position */
-    setCursor(p) {
-      cursor = p;
-    },
-    /** @param {{ fadeMs?: number, flashStyle?: 'glass'|'dim', smoothMs?: number, peekRadius?: number }} s */
+    /** @param {{ fadeMs?: number, flashStyle?: 'glass'|'dim', smoothMs?: number }} s */
     setStyle(s) {
-      if (s.peekRadius != null) peekRadius = s.peekRadius;
       if (s.fadeMs != null) fadeMs = s.fadeMs;
       if (s.flashStyle) flashStyle = s.flashStyle;
       if (s.smoothMs != null) smoothMs = s.smoothMs;

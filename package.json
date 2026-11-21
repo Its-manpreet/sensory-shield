@@ -2,7 +2,7 @@
   "name": "sensory-shield",
   "version": "0.1.0",
   "private": true,
-  "description": "Local desktop app that gently dims flashing content and blurs graphic content on screen. Reduces exposure to known triggers.",
+  "description": "Local desktop app that softens flashing content on screen. Reduces exposure to known triggers.",
   "type": "module",
   "main": "src/main/main.js",
   "scripts": {
@@ -14,9 +14,8 @@
     "demo": "node test/serve.js",
     "app": "open -n -a \"$PWD/node_modules/electron/dist/Electron.app\" --args \"$PWD\"",
     "app:debug": "mkdir -p logs && open -n -a \"$PWD/node_modules/electron/dist/Electron.app\" --env SHIELD_DEBUG=1 --stdout \"$PWD/logs/debug.log\" --stderr \"$PWD/logs/debug.log\" --args \"$PWD\"",
-    "vision:setup": "node scripts/vision-setup.js",
-    "dist": "npm run vision:setup && electron-builder",
-    "dist:dir": "npm run vision:setup && electron-builder --dir"
+    "dist": "electron-builder",
+    "dist:dir": "electron-builder --dir"
   },
   "license": "UNLICENSED",
   "devDependencies": {
@@ -37,19 +36,6 @@
       "src/**/*",
       "package.json",
       "!**/*.md"
-    ],
-    "extraResources": [
-      {
-        "from": "vendor/llama.cpp/${platform}-${arch}",
-        "to": "llama"
-      },
-      {
-        "from": "models/lfm3-vl",
-        "to": "models/lfm3-vl",
-        "filter": [
-          "*.gguf"
-        ]
-      }
     ],
     "asar": true,
     "mac": {

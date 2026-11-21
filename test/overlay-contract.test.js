@@ -34,17 +34,13 @@ test('profiles: the three defaults exist with every contract field', () => {
   assert.ok(activeProfile(defaultSettings()));
 });
 
-test('regions: flash -> dim, matched tile -> blur, safe tile -> nothing', () => {
-  const profile = DEFAULT_PROFILES['graphic-sensitive'];
+test('regions: flash events -> softened regions; flash off -> none', () => {
+  const profile = DEFAULT_PROFILES.photosensitive;
   const rect = { x: 0, y: 0, w: 0.25, h: 0.25 };
-  const regions = toRegions(
-    [{ rect, severity: 1, kind: 'luminance', active: true }],
-    [
-      { rect, triggerId: 'spiders', label: 'spiders', score: 0.9 },
-      { rect: { ...rect, x: 0.5 }, triggerId: null, label: null, score: 0.1 },
-    ],
-    profile,
-  );
-  assert.deepEqual(regions.map((r) => r.effect), ['dim', 'blur']);
+  const events = [{ rect, severity: 1, kind: 'luminance', active: true }, { rect: { ...rect, x: 0.5 }, severity: 1, kind: 'red', active: false }];
+  const regions = toRegions(events, profile);
+  assert.deepEqual(regions.map((r) => r.effect), ['dim', 'dim']);
+  assert.match(regions[1].reason, /Red/);
   assert.ok(regions.every((r) => isRect(r.rect) && r.strength >= 0 && r.strength <= 1));
+  assert.deepEqual(toRegions(events, { ...profile, flash: { ...profile.flash, enabled: false } }), []);
 });

@@ -3,7 +3,6 @@ import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, screen, sessio
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings } from './settings-file.js';
-import { startVision, analyzeScreen } from './vision.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(here, '..');
@@ -21,7 +20,6 @@ let settingsWin = null;
 let tray = null;
 let lastStats = null;
 let revealUntil = 0;
-let cursorTimer = null;
 
 /** reveal hotkey: show everything for REVEAL_MS; pressing it again while revealed ends the reveal early */
 function toggleReveal() {
@@ -29,26 +27,6 @@ function toggleReveal() {
   const ms = now < revealUntil ? 0 : REVEAL_MS;
   revealUntil = now + ms;
   broadcast('shield:reveal', { ms });
-}
-
-/** "clear the blur around the cursor": stream the cursor position (normalized) to the overlay while enabled */
-function updateCursorFeed() {
-  const want = settings.enabled && (settings.appearance?.peekRadius ?? 0) > 0;
-  if (want && !cursorTimer) {
-    let last = '';
-    cursorTimer = setInterval(() => {
-      if (!overlayWin || overlayWin.isDestroyed()) return;
-      const { bounds: b } = screen.getPrimaryDisplay();
-      const p = screen.getCursorScreenPoint();
-      const msg = { x: (p.x - b.x) / b.width, y: (p.y - b.y) / b.height };
-      const key = `${msg.x.toFixed(4)},${msg.y.toFixed(4)}`;
-      if (key !== last) (last = key), overlayWin.webContents.send('shield:cursor', msg);
-    }, 16);
-  } else if (!want && cursorTimer) {
-    clearInterval(cursorTimer);
-    cursorTimer = null;
-    overlayWin?.webContents.send('shield:cursor', null);
-  }
 }
 
 function broadcast(channel, payload) {
@@ -164,7 +142,6 @@ function registerIpc() {
     saveSettings(settings);
     broadcast('settings:changed', settings);
     refreshTray();
-    updateCursorFeed();
     return settings;
   });
   ipcMain.handle('shield:status', () => ({ screenAccess: screenAccess(), platform: process.platform, hotkeys: HOTKEYS }));
@@ -175,9 +152,6 @@ function registerIpc() {
     app.relaunch();
     app.exit(0);
   });
-  // on-device vision model (llama.cpp child process on 127.0.0.1); frames arrive in memory, never stored
-  ipcMain.handle('vision:start', () => startVision());
-  ipcMain.handle('vision:analyze', (_e, { jpeg, terms, classify }) => analyzeScreen(jpeg, terms, { classify }));
   ipcMain.on('shield:stats', (_e, stats) => {
     lastStats = stats; // counts only, never pixels
     settingsWin?.isDestroyed() === false && settingsWin.webContents.send('shield:stats', stats);
@@ -227,13 +201,10 @@ app.whenReady().then(() => {
   createOverlay();
   createTray();
   globalShortcut.register(HOTKEYS.reveal, toggleReveal);
-  updateCursorFeed();
   globalShortcut.register(HOTKEYS.toggle, () => setEnabled(!settings.enabled));
   globalShortcut.register(HOTKEYS.settings, openSettings);
   openSettings(); // the window is the app's face; closing it leaves the shield running in the tray
   if (SELFTEST) {
-    // SHIELD_VISION_CHECK=1: also start the bundled vision model and report (packaging check)
-    if (process.env.SHIELD_VISION_CHECK === '1') startVision().then((r) => console.log(`SELFTEST vision ${JSON.stringify(r)}`));
     setTimeout(() => app.quit(), SPIKE ? 9000 : 6000);
   }
 });

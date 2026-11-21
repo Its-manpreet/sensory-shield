@@ -14,12 +14,9 @@ contextBridge.exposeInMainWorld('shield', {
   onSettingsChanged: (cb) => listen('settings:changed', cb),
   onToggle: (cb) => listen('shield:toggle', cb),
   onReveal: (cb) => listen('shield:reveal', cb),
-  onCursor: (cb) => listen('shield:cursor', cb), // normalized {x, y} or null; only while "clear around cursor" is on
   sendStats: (stats) => ipcRenderer.send('shield:stats', stats),
   onStats: (cb) => listen('shield:stats', cb), // settings window status line (main re-broadcasts)
   getStatus: () => ipcRenderer.invoke('shield:status'),
   openPermission: () => ipcRenderer.send('shield:open-permission'),
   relaunch: () => ipcRenderer.send('shield:relaunch'),
-  visionStart: () => ipcRenderer.invoke('vision:start'),
-  visionAnalyze: (jpeg, terms, classify) => ipcRenderer.invoke('vision:analyze', { jpeg, terms, classify }),
 });

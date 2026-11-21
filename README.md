@@ -1,13 +1,12 @@
 # Sensory Shield
 
-A personal sensory shield that runs entirely on your own device and gently dims or blurs flashing and graphic content, tuned to each person's own triggers. It **reduces exposure to known triggers**; it is not a medical device.
+A personal sensory shield that runs entirely on your own device and gently softens flashing content. It **reduces exposure to known triggers**; it is not a medical device.
 
 Read first: `CLAUDE.md` (brief and rules), `START-HERE.md` (team plan), `docs/INTERFACES.md` (frozen contract), your prompt in `agents/`.
 
 ## Setup
 ```sh
 npm install
-npm run vision:setup   # one time: llama.cpp build for this OS + LFM3-VL-2B model (~1.3 GB) into vendor/ and models/
 npm test          # Node unit tests (node --test test/)
 npm start         # run the app (tray icon "Shield"; overlay is invisible until something is flagged)
 npm run selftest  # starts the app, prints renderer logs, quits after 6 s
@@ -22,7 +21,7 @@ Hotkeys: reveal 5 s `Cmd/Ctrl+Alt+R`, shield on/off `Cmd/Ctrl+Alt+S`, settings `
 | `src/main/` | A | main process: windows, tray, hotkeys, IPC, settings file, network lock, capture handler |
 | `src/overlay/` | A | overlay renderer: capture loop, `regions.js` (events -> regions), `effects.js` |
 | `src/engine/flash.js` | B | flash detector (stub until B lands it) |
-| `src/engine/content.js` | C | content detector (stub until C lands it) |
+| `src/engine/content.js` | C | content detector: removed for now (see tag `vision-v1`) |
 | `src/settings/` | D | settings window (placeholder until D lands it) |
 | `src/shared/` | D | `profiles.js` defaults, `store.js` settings store, `types.js` JSDoc types |
 | `assets/` | D | test clips (git-ignored), calibration images, demo page |
@@ -37,16 +36,12 @@ Every stub already matches `docs/INTERFACES.md`, so you can replace one module w
 ### macOS: run as its own app (recommended)
 `npm run app` launches Electron as a standalone app, so macOS asks for Screen Recording permission for **Electron** itself (not your terminal). Grant it in System Settings → Privacy & Security → Screen & System Audio Recording, then press **Relaunch** in the Sensory Shield window.
 
-## Content blocklist (vision model)
-Type any words in Settings → Content ("spiders", "gore", "pornography", "clowns", "cartoon"). An on-device
-vision-language model (LFM3-VL-2B) runs in a bundled llama.cpp server on 127.0.0.1 with a per-launch key;
-screenshots stay in memory and never leave the machine. It loads only when content protection has a trigger.
-Accuracy check on your own screenshots: `node test/vision/eval.js <folder>` (see the file for naming).
+## Content blocklist
+Removed for now (the app is flash protection only). The vision-model version is kept at git tag `vision-v1`.
 
 ## Packaging
 ```sh
 npm run dist:dir   # unpacked app in dist/ (fast check)
 npm run dist       # installer: .dmg on macOS, NSIS .exe on Windows, AppImage on Linux
 ```
-Build on each target OS: `vision:setup` fetches that OS's llama.cpp build, and electron-builder copies it plus
-the model into the app's resources. The app is unsigned (fine for the demo; macOS: right-click → Open the first time).
+Build on each target OS. The app is unsigned (fine for the demo; macOS: right-click → Open the first time).

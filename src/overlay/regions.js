@@ -1,42 +1,19 @@
-// OWNER: Agent A. Pure function: detector outputs + active profile -> Region[] for the effects renderer.
-// Kept DOM-free so it can be unit tested in Node (test/overlay-regions.test.js).
+// OWNER: Agent A. Pure function: flash detector output + active profile -> Region[] for the effects renderer.
+// Kept DOM-free so it can be unit tested in Node (test/overlay-contract.test.js).
+// (Content tiles -> blur regions is removed for now; see git tag vision-v1.)
 
 /**
  * @param {import('../shared/types.js').FlashEvent[]} flashEvents
- * @param {import('../shared/types.js').TileResult[]} tiles
  * @param {import('../shared/types.js').Profile} profile
  * @returns {import('../shared/types.js').Region[]}
  */
-let revealHint = '';
-/** e.g. "⌥⌘R": shown in content labels so the reveal hotkey is discoverable */
-export function setRevealHint(text) {
-  revealHint = text;
-}
-
-export function toRegions(flashEvents, tiles, profile) {
-  const regions = [];
-  if (profile.flash.enabled) {
-    flashEvents.forEach((ev, i) => {
-      regions.push({
-        id: `flash-${i}-${ev.rect.x.toFixed(3)}-${ev.rect.y.toFixed(3)}`,
-        rect: ev.rect,
-        effect: 'dim',
-        reason: ev.kind === 'red' ? 'Red flashing softened' : 'Flashing softened',
-        strength: profile.response.dimLevel,
-      });
-    });
-  }
-  if (profile.content.enabled) {
-    for (const t of tiles) {
-      if (!t.triggerId) continue;
-      regions.push({
-        id: t.id ?? `tile-${t.rect.x.toFixed(3)}-${t.rect.y.toFixed(3)}`, // detectors may give stable ids
-        rect: t.rect,
-        effect: 'blur',
-        reason: `Blurred: ${t.label ?? t.triggerId}${revealHint ? ` · ${revealHint} to show` : ''}`,
-        strength: Math.min(1, profile.response.blurStrengthPx / 40),
-      });
-    }
-  }
-  return regions;
+export function toRegions(flashEvents, profile) {
+  if (!profile.flash.enabled) return [];
+  return flashEvents.map((ev, i) => ({
+    id: `flash-${i}-${ev.rect.x.toFixed(3)}-${ev.rect.y.toFixed(3)}`,
+    rect: ev.rect,
+    effect: 'dim', // drawn as glass fog or a dark veil, per settings.appearance.flashStyle
+    reason: ev.kind === 'red' ? 'Red flashing softened' : 'Flashing softened',
+    strength: profile.response.dimLevel,
+  }));
 }

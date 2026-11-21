@@ -170,7 +170,7 @@ test('settings migration: new default numbers, user choices kept', async () => {
   const s = migrateSettings(old);
   assert.equal(s.version, SETTINGS_VERSION);
   assert.equal(s.enabled, false);
-  assert.equal(s.activeProfileId, 'custom');
+  assert.equal(s.activeProfileId, 'photosensitive'); // flash-only for now: profile picker hidden
   assert.equal(s.appearance.flashStyle, 'dim');
   assert.deepEqual(s.profiles.custom.content.customTriggers, ['spiders']);
   assert.equal(s.profiles.custom.flash.minAreaFraction, 0.15);

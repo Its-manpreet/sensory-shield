@@ -36,7 +36,7 @@ export const DEFAULT_PROFILES = {
  * @returns {import('./types.js').Settings}
  */
 /** bump when default numbers change; older saved settings are migrated in src/main/settings-file.js */
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 4;
 
 export function defaultSettings() {
   return {
@@ -46,7 +46,7 @@ export function defaultSettings() {
     profiles: structuredClone(DEFAULT_PROFILES),
     // How flashing is softened. 'glass': frosted fog over a time-smoothed copy (colours drift slowly);
     // 'dim': dark veil. smoothMs: time constant of the colour smoothing. Not part of Profile (frozen contract).
-    appearance: { flashStyle: 'glass', smoothMs: 900, peekRadius: 0 }, // peekRadius > 0: clear content blur around the cursor (CSS px)
+    appearance: { flashStyle: 'glass', smoothMs: 900 },
   };
 }
 
@@ -67,7 +67,8 @@ export function migrateSettings(saved) {
   return {
     ...fresh,
     enabled: saved.enabled ?? fresh.enabled,
-    activeProfileId: profiles[saved.activeProfileId] ? saved.activeProfileId : fresh.activeProfileId,
+    // the profile picker is hidden while the app is flash-only: everyone uses Photosensitive
+    activeProfileId: fresh.activeProfileId,
     appearance: { ...fresh.appearance, ...saved.appearance },
     profiles,
   };

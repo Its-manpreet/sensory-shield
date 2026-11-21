@@ -1,17 +1,11 @@
-// OWNER: Agent D. Settings window: edits the active profile and app appearance, shows live status.
+// OWNER: Agent D. Settings window: flash protection settings and appearance, live status.
+// (Profile picker and content blocklist are removed for now; see git tag vision-v1.)
 // Every change is saved immediately and the overlay applies it without a restart.
 import { getSettings, setSettings, onChange } from '../shared/store.js';
 
 const $ = (id) => document.getElementById(id);
 const shield = window.shield; // undefined when opened as a plain web page (mock store)
 
-const PROFILE_HINTS = {
-  photosensitive: 'Strict flash softening with red-flash detection.',
-  'graphic-sensitive': 'Softens flashing and blurs graphic content.',
-  custom: 'Your own mix. Add the triggers that matter to you.',
-};
-const PRESET_LABELS = { 'graphic-violence': 'graphic violence', 'graphic-injury': 'graphic injury' };
-const SUGGESTIONS = ['gore', 'pornography', 'spiders', 'clowns', 'needles'];
 const HOTKEY_LABELS = { reveal: 'Reveal for 5 s', toggle: 'Shield on / off', settings: 'Open this window' };
 
 /** @type {import('../shared/types.js').Settings} */
@@ -85,72 +79,10 @@ function renderHero() {
   $('permission').hidden = !(status.platform === 'darwin' && (status.screenAccess !== 'granted' || capture === 'denied'));
 }
 
-function renderChips() {
-  const p = profile();
-  const items = [
-    ...p.content.categories.map((c) => ({ label: PRESET_LABELS[c] ?? c, key: c, kind: 'categories' })),
-    ...p.content.customTriggers.map((c) => ({ label: c, key: c, kind: 'customTriggers' })),
-  ];
-  $('chips').replaceChildren(
-    ...items.map(({ label, key, kind }) => {
-      const li = document.createElement('li');
-      if (kind === 'categories') li.className = 'preset';
-      li.append(label);
-      const x = document.createElement('button');
-      x.type = 'button';
-      x.textContent = '×';
-      x.setAttribute('aria-label', `Remove ${label}`);
-      x.addEventListener('click', () => {
-        patchProfile('content', { [kind]: profile().content[kind].filter((v) => v !== key) });
-        renderChips();
-        renderSuggestions();
-        $('trigger-input').focus();
-      });
-      li.append(x);
-      return li;
-    }),
-  );
-}
-
-function renderSuggestions() {
-  const p = profile();
-  const have = new Set([...p.content.customTriggers, ...p.content.categories]);
-  $('suggest').replaceChildren(
-    ...SUGGESTIONS.filter((w) => !have.has(w)).map((w) => {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = `+ ${w}`;
-      b.setAttribute('aria-label', `Add ${w}`);
-      b.addEventListener('click', () => addTrigger(w));
-      return b;
-    }),
-  );
-}
-
-function addTrigger(raw) {
-  const text = raw.trim().replace(/\s+/g, ' ').toLowerCase();
-  if (!text || profile().content.customTriggers.includes(text)) return;
-  // adding a trigger implies the user wants content protection on
-  patchProfile('content', { customTriggers: [...profile().content.customTriggers, text], enabled: true });
-  render();
-}
-
 function render() {
   const p = profile();
   const look = settings.appearance ?? { flashStyle: 'glass', smoothMs: 900 };
   setSwitch($('enabled'), settings.enabled);
-  $('profiles').replaceChildren(
-    ...Object.values(settings.profiles).map((pr) => {
-      const b = document.createElement('button');
-      b.setAttribute('role', 'radio');
-      b.dataset.value = pr.id;
-      b.textContent = pr.id === 'graphic-sensitive' ? 'Graphic' : pr.name;
-      b.title = pr.name;
-      return b;
-    }),
-  );
-  setRadio($('profiles'), p.id);
-  $('profile-hint').textContent = PROFILE_HINTS[p.id] ?? '';
 
   setSwitch($('flash-enabled'), p.flash.enabled);
   setRadio($('flash-style'), look.flashStyle);
@@ -162,27 +94,15 @@ function render() {
   $('dim-out').textContent = `${Math.round(p.response.dimLevel * 100)}%`;
   $('red').checked = p.flash.detectRed;
 
-  setSwitch($('content-enabled'), p.content.enabled);
-  const sens = Math.round((1 - p.content.threshold) * 100);
-  $('sensitivity').value = sens;
-  $('sens-out').textContent = sens < 30 ? 'Low' : sens < 50 ? 'Medium' : 'High';
-  renderChips();
-  renderSuggestions();
-
   $('fade').value = p.response.fadeMs;
   $('fade-out').textContent = `${p.response.fadeMs} ms`;
   $('labels').checked = p.response.showLabel;
-  $('peek').checked = (look.peekRadius ?? 0) > 0;
   renderHero();
 }
 
 function renderStats(st) {
   lastStats = st;
-  const model = { off: 'off', loading: 'starting vision model…', failed: 'vision model unavailable' }[st.device] ?? st.device.replace(/^llama\.cpp /, '');
-  $('stats').textContent =
-    st.capture === 'ok'
-      ? `${st.fps.toFixed(0)} fps · flash check ${st.flashMs.toFixed(2)} ms · content ${model}${st.modelHz ? `, ${st.modelHz.toFixed(1)} checks/s` : ''}`
-      : '';
+  $('stats').textContent = st.capture === 'ok' ? `${st.fps.toFixed(0)} fps · flash check ${st.flashMs.toFixed(2)} ms per frame` : '';
   renderHero();
 }
 
@@ -192,11 +112,6 @@ $('enabled').addEventListener('click', () => {
   setSwitch($('enabled'), settings.enabled);
   renderHero();
   save({ enabled: settings.enabled });
-});
-radioKeys($('profiles'), (id) => {
-  settings = { ...settings, activeProfileId: id };
-  render();
-  save({ activeProfileId: id });
 });
 $('flash-enabled').addEventListener('click', () => {
   patchProfile('flash', { enabled: !profile().flash.enabled });
@@ -217,31 +132,11 @@ $('dim').addEventListener('input', (e) => {
   $('dim-out').textContent = `${e.target.value}%`;
 });
 $('red').addEventListener('change', (e) => patchProfile('flash', { detectRed: e.target.checked }));
-$('content-enabled').addEventListener('click', () => {
-  patchProfile('content', { enabled: !profile().content.enabled });
-  render();
-});
-$('trigger-form').addEventListener('submit', (e) => {
-  e.preventDefault();
-  const input = $('trigger-input');
-  addTrigger(input.value);
-  input.value = '';
-  input.focus();
-});
-$('sensitivity').addEventListener('input', (e) => {
-  const sens = Number(e.target.value);
-  patchProfile('content', { threshold: 1 - sens / 100 });
-  $('sens-out').textContent = sens < 30 ? 'Low' : sens < 50 ? 'Medium' : 'High';
-});
 $('fade').addEventListener('input', (e) => {
   patchProfile('response', { fadeMs: Number(e.target.value) });
   $('fade-out').textContent = `${e.target.value} ms`;
 });
 $('labels').addEventListener('change', (e) => patchProfile('response', { showLabel: e.target.checked }));
-$('peek').addEventListener('change', (e) => {
-  settings = { ...settings, appearance: { ...settings.appearance, peekRadius: e.target.checked ? 110 : 0 } };
-  save({ appearance: settings.appearance });
-});
 $('open-permission').addEventListener('click', () => shield?.openPermission());
 $('relaunch').addEventListener('click', () => shield?.relaunch());
 

@@ -184,7 +184,7 @@
         } else if (events.length) setStatus('hold', 'Holding until the flashing has clearly stopped');
         else setStatus('watch', 'Watching: no flashing');
 
-        if ($('protect').checked) effects.setRegions(toRegions(events, [], profile), now);
+        if ($('protect').checked) effects.setRegions(toRegions(events, profile), now);
         $('m-frames').textContent = String(frames);
         $('m-push').textContent = `${(pushTotal / frames).toFixed(2)} ms`;
         $('m-detect').textContent = firstDim === null ? '–' : `${Math.round(firstDim)} ms`;

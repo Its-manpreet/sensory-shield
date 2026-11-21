@@ -17,7 +17,7 @@
         </svg>
         <div>
           <h1>Sensory Shield</h1>
-          <p class="tagline">Reduces exposure to known triggers, on this device only.</p>
+          <p class="tagline">Softens flashing on your screen. Everything stays on this device.</p>
         </div>
       </div>
     </header>
@@ -44,12 +44,6 @@
         </div>
       </section>
 
-      <section class="card" aria-labelledby="profile-title">
-        <h2 id="profile-title">Profile</h2>
-        <div id="profiles" class="segmented" role="radiogroup" aria-labelledby="profile-title"></div>
-        <p id="profile-hint" class="hint"></p>
-      </section>
-
       <section class="card" aria-labelledby="flash-title">
         <div class="section-head">
           <h2 id="flash-title">Flashing</h2>
@@ -74,27 +68,6 @@
         <label class="check"><input id="red" type="checkbox" /> Also watch for saturated red flashes</label>
       </section>
 
-      <section class="card" aria-labelledby="content-title">
-        <div class="section-head">
-          <h2 id="content-title">Content</h2>
-          <button id="content-enabled" class="switch" role="switch" aria-checked="false" aria-label="Content protection"><span></span></button>
-        </div>
-        <div class="field">
-          <label for="trigger-input">Blur anything that shows</label>
-          <form id="trigger-form" class="trigger-form">
-            <input id="trigger-input" type="text" placeholder="Type a trigger, e.g. spiders" autocomplete="off" />
-            <button class="btn primary" type="submit">Add</button>
-          </form>
-          <ul id="chips" class="chips" aria-label="Active triggers"></ul>
-          <div class="suggest" id="suggest" aria-label="Suggestions"></div>
-          <p class="hint" id="content-hint">Any words work, broad or specific. An on-device vision model looks at the screen about once a second when it changes; nothing leaves this computer.</p>
-        </div>
-        <div class="field">
-          <label for="sensitivity">Sensitivity <output id="sens-out" for="sensitivity"></output></label>
-          <input id="sensitivity" type="range" min="10" max="70" step="1" />
-        </div>
-      </section>
-
       <section class="card" aria-labelledby="look-title">
         <h2 id="look-title">Appearance</h2>
         <div class="field">
@@ -102,8 +75,6 @@
           <input id="fade" type="range" min="0" max="1200" step="50" />
         </div>
         <label class="check"><input id="labels" type="checkbox" /> Show a small label saying why</label>
-        <label class="check"><input id="peek" type="checkbox" /> Clear blurred pictures around the cursor</label>
-        <p class="hint">Flash protection always stays on. Clicks always go through to the app underneath.</p>
       </section>
 
       <footer class="foot">
