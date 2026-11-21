@@ -1,0 +1,18 @@
+node_modules/
+# Model weights are cached locally, never committed (see docs/DECISIONS.md)
+models/*
+!models/README.md
+# Large media: generated clips stay local; regenerate with the script in test/
+assets/clips/*
+!assets/clips/README.md
+*.mp4
+*.webm
+*.mov
+*.onnx
+*.bin
+*.safetensors
+dist/
+out/
+.DS_Store
+*.log
+.env

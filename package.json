@@ -1,0 +1,24 @@
+{
+  "name": "sensory-shield",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local desktop app that gently dims flashing content and blurs graphic content on screen. Reduces exposure to known triggers.",
+  "type": "module",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/",
+    "selftest": "SHIELD_SELFTEST=1 electron ."
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.2"
+  },
+  "devDependencies": {
+    "electron": "^45.4.1"
+  },
+  "allowScripts": {
+    "onnxruntime-node": false,
+    "protobufjs": false
+  }
+}

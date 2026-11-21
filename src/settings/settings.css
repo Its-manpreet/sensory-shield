@@ -1,0 +1,7 @@
+/* OWNER: Agent D. Calm, high-contrast, no flashing animation. */
+:root { color-scheme: light dark; font: 16px/1.5 system-ui, sans-serif; }
+body { margin: 0; padding: 24px; }
+.row { display: flex; gap: 12px; align-items: center; margin: 12px 0; }
+.tagline { opacity: 0.8; }
+:focus-visible { outline: 3px solid #2a7fff; outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }

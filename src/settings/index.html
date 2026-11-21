@@ -1,0 +1,21 @@
+<!doctype html>
+<!-- OWNER: Agent D. SCAFFOLD placeholder. Also opens in a plain browser (mock store) for fast UI work:
+     run `npx http-server -c-1 .` or similar from the repo root and open /src/settings/index.html -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sensory Shield</title>
+    <link rel="stylesheet" href="./settings.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Sensory Shield</h1>
+      <p class="tagline">Reduces exposure to known triggers. Everything stays on this device.</p>
+      <label class="row"><input type="checkbox" id="enabled" /> Shield on</label>
+      <label class="row">Profile <select id="profile"></select></label>
+      <p id="status" role="status" aria-live="polite">Loading…</p>
+    </main>
+    <script type="module" src="./settings.js"></script>
+  </body>
+</html>
