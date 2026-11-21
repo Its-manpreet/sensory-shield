@@ -47,6 +47,22 @@ for (const [name, gen, kind] of [
   });
 }
 
+const PLAYER = { x: 0.2, y: 0.18, w: 0.6, h: 0.6 }; // YouTube-sized player, 36% of the screen
+for (const [name, gen] of [
+  ['photo strobe 4 Hz full screen', () => scenes.photoStrobe(4)],
+  ['photo strobe 8 Hz full screen', () => scenes.photoStrobe(8)],
+  ['photo strobe 5 Hz in a video player', () => scenes.photoStrobe(5, { box: PLAYER })],
+  ['photo vs its negative at 5 Hz', () => scenes.photoNegative(5)],
+  ['brightness strobe while the camera pans at 800 px/s', () => scenes.strobeWhilePanning(5, 800)],
+  ['rapid bright/dark cuts, 8 per second', () => scenes.rapidCuts(8)],
+]) {
+  test(`realistic trigger detected within 1.2 s: ${name}`, () => {
+    const hit = firstActive(run(createFlashDetector(), gen()));
+    assert.ok(hit, 'expected an active event');
+    assert.ok(hit.tMs <= 1200, `first event at ${hit.tMs} ms`);
+  });
+}
+
 test('flashing video while the page around it scrolls: still detected', () => {
   const hit = firstActive(run(createFlashDetector(), scenes.flashWhileScrolling(6, 1500)));
   assert.ok(hit, 'expected an active event');
@@ -105,4 +121,26 @@ test('60 fps input: 3 Hz flash still detected within 1 s', () => {
   const gen = frames({ seconds: 2, fps: 60, pixel: (_x, _y, t) => (Math.floor((t / 1000) * 6) % 2 ? [0, 0, 0] : [255, 255, 255]) });
   const hit = firstActive(run(createFlashDetector(), gen));
   assert.ok(hit && hit.tMs <= 1000);
+});
+
+test('profiles: photosensitive catches a flash covering 12% of the screen (part of a video player)', async () => {
+  const { DEFAULT_PROFILES } = await import('../src/shared/profiles.js');
+  const box = { x: 0.3, y: 0.3, w: 0.35, h: 0.35 };
+  const det = createFlashDetector({ ...DEFAULT_PROFILES.photosensitive.flash });
+  assert.ok(firstActive(run(det, scenes.photoStrobe(5, { box }))));
+});
+
+test('settings migration: new default numbers, user choices kept', async () => {
+  const { migrateSettings, SETTINGS_VERSION } = await import('../src/shared/profiles.js');
+  const old = {
+    enabled: false, activeProfileId: 'custom', appearance: { flashStyle: 'dim', smoothMs: 1500 },
+    profiles: { custom: { content: { customTriggers: ['spiders'] }, flash: { minAreaFraction: 0.25 } } },
+  };
+  const s = migrateSettings(old);
+  assert.equal(s.version, SETTINGS_VERSION);
+  assert.equal(s.enabled, false);
+  assert.equal(s.activeProfileId, 'custom');
+  assert.equal(s.appearance.flashStyle, 'dim');
+  assert.deepEqual(s.profiles.custom.content.customTriggers, ['spiders']);
+  assert.equal(s.profiles.custom.flash.minAreaFraction, 0.15);
 });

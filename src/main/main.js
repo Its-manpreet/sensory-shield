@@ -54,6 +54,22 @@ function createOverlay() {
   const query = {};
   if (SELFTEST) query.selftest = '1';
   if (SPIKE) query.spike = '1';
+  if (process.env.SHIELD_DEBUG === '1') query.debug = '1';
+  // macOS can re-place a panel once it is shown (seen: y=-32, 32 px taller). Re-assert the exact display
+  // bounds after load and whenever displays change, or every effect lands off target.
+  const fit = () => {
+    const { bounds: b } = screen.getPrimaryDisplay();
+    const cur = overlayWin.getBounds();
+    if (cur.x !== b.x || cur.y !== b.y || cur.width !== b.width || cur.height !== b.height) {
+      overlayWin.setBounds(b);
+      console.log(`[main] overlay refit ${JSON.stringify(cur)} -> ${JSON.stringify(overlayWin.getBounds())}`);
+    }
+  };
+  overlayWin.webContents.on('did-finish-load', fit);
+  overlayWin.on('move', fit);
+  overlayWin.on('resize', fit);
+  screen.on('display-metrics-changed', fit);
+  setTimeout(fit, 1000);
   overlayWin.loadFile(path.join(SRC, 'overlay/index.html'), { query });
 }
 

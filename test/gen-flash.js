@@ -45,18 +45,33 @@ const hash = (a, b) => {
 };
 
 /** a photo grid like Google Photos: tiles of random brightness/colour with white gutters */
-function photoGrid(x, y, dark = false) {
+function photoGrid(x, y, dark = false, seed = 0) {
   const tw = 0.16, th = 0.24, gap = 0.012; // tile size in screen widths / heights
   const col = Math.floor(x / tw), row = Math.floor(y / th);
   const fx = x / tw - col, fy = y / th - row;
   if (fx < gap / tw || fy < gap / th) return dark ? [20, 20, 22] : [255, 255, 255];
-  const v = hash(col, row);
+  const v = hash(col + seed * 101, row + seed * 37);
   if (v < 0.25) return [15 + 30 * v, 15 + 20 * v, 20]; // night photo
   if (v > 0.75) return [235, 235, 230]; // snow / bright sky
-  const h = hash(row, col);
+  const h = hash(row + seed * 53, col + seed * 7);
   // simple in-tile structure: a horizon line
   return fy < 0.45 ? [120 + 100 * h, 160 + 80 * h, 230] : [60 + 120 * v, 90 + 60 * h, 40 + 50 * v];
 }
+
+/** a "photo": a few large soft shapes plus a horizon, varied by seed */
+function photo(x, y, seed) {
+  let r = 90 + 80 * hash(seed, 1), g = 100 + 70 * hash(seed, 2), b = 110 + 80 * hash(seed, 3);
+  if (y > 0.4 + 0.2 * hash(seed, 4)) (r *= 0.6), (g *= 0.8), (b *= 0.5);
+  for (let k = 0; k < 5; k++) {
+    const cx = hash(seed, 10 + k), cy = hash(seed, 20 + k), rad = 0.08 + 0.2 * hash(seed, 30 + k);
+    if ((x - cx) ** 2 + (y - cy) ** 2 < rad * rad) {
+      const c = hash(seed, 40 + k) * 255;
+      (r = c), (g = 255 - c), (b = hash(seed, 50 + k) * 255);
+    }
+  }
+  return [r, g, b];
+}
+const scaled = (c, k) => c.map((v) => Math.min(255, v * k));
 
 /** scroll position in screen heights at time t for a speed profile */
 const scrollPos = (profile, speed, t) => {
@@ -136,6 +151,32 @@ export const scenes = {
         return photoGrid(x, y + (speedPx / 956) * (t / 1000));
       },
     }),
+
+  // --- realistic photosensitive-trigger footage (must be detected) ---
+
+  /** two different photos strobing against each other; box limits it to a player-sized area */
+  photoStrobe: (hz, { box = { x: 0, y: 0, w: 1, h: 1 }, s = 3 } = {}) =>
+    frames({
+      seconds: s,
+      ss: 2,
+      pixel: (x, y, t) => {
+        if (x < box.x || x >= box.x + box.w || y < box.y || y >= box.y + box.h) return GREY;
+        const u = (x - box.x) / box.w, v = (y - box.y) / box.h;
+        return on(hz, t) ? scaled(photo(u, v, 1), 1.25) : scaled(photo(u, v, 2), 0.25);
+      },
+    }),
+
+  /** a photo alternating with its negative */
+  photoNegative: (hz, s = 3) =>
+    frames({ seconds: s, ss: 2, pixel: (x, y, t) => { const c = photo(x, y, 3); return on(hz, t) ? c : c.map((v) => 255 - v); } }),
+
+  /** a panning camera whose brightness strobes (concert lights, explosions while the camera moves) */
+  strobeWhilePanning: (hz, panPx, s = 3) =>
+    frames({ seconds: s, ss: 2, pixel: (x, y, t) => scaled(photo(x + (panPx / 1470) * (t / 1000), y, 4), on(hz, t) ? 1.2 : 0.15) }),
+
+  /** hard cuts between different bright and dark shots every 1000/cutsPerSec ms */
+  rapidCuts: (cutsPerSec, s = 3) =>
+    frames({ seconds: s, ss: 2, pixel: (x, y, t) => { const k = Math.floor((t / 1000) * cutsPerSec); return scaled(photo(x, y, 10 + k), k % 2 ? 1.25 : 0.2); } }),
 
   /** moving gradients with a hard scene cut every 2.5 s: ordinary video */
   normalVideo: (s = 10) =>

@@ -15,6 +15,7 @@ const video = /** @type {HTMLVideoElement} */ (document.getElementById('capture'
 const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById('fx'));
 const params = new URLSearchParams(location.search);
 const selftest = params.has('selftest');
+const debug = params.has('debug');
 const log = (...a) => console.log('[shield]', ...a);
 
 let settings = await getSettings();
@@ -82,6 +83,11 @@ setInterval(() => {
   };
   window.shield?.sendStats(out);
   if (selftest) log('stats', JSON.stringify(out));
+  // `npm run app:debug`: what the flash detector saw this second (numbers only, never pixels)
+  if (debug && flash.diagnostics) {
+    const d = flash.diagnostics();
+    log(`flash fps=${out.fps.toFixed(0)} maxFlashes/s=${d.maxFlashes} flashingArea=${(100 * d.maxFlashingFraction).toFixed(1)}% (needs ${100 * d.minAreaFraction}%) motion=${(100 * d.movingShare).toFixed(0)}% regions=${flashEvents.length}`);
+  }
   Object.assign(stats, { frames: 0, flashMs: 0, modelMs: 0, modelRuns: 0, since: now });
 }, 1000);
 

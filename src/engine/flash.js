@@ -35,7 +35,7 @@ const RING = 32; // transition timestamps kept per cell and channel; only >= 2*m
 const BLOCK_W = 8; // motion blocks, in cells
 const BLOCK_H = 6;
 const MAX_DX = 4; // motion search range, in cells per frame (about 100 px sideways)
-const MAX_DY = 8; // about 210 px per frame vertically: covers flick-scrolling at 30 fps
+const MAX_DY = 14; // about 370 px per frame vertically: covers hard trackpad flicks at 30 fps
 const MOTION_MIN_CHANGE = 0.012; // mean |change| below this: nothing moved, skip the search
 const MOTION_RATIO = 0.6; // moving when the best shift leaves <= 60% of the unshifted difference
 const MOTION_HOLD_MS = 250; // a block stays "moving" this long after the last moving frame
@@ -43,6 +43,13 @@ const MOTION_HOLD_MS = 250; // a block stays "moving" this long after the last m
 // local gradient. A flat block (the inside of a flashing area) or a change far larger than its edges
 // could cause (a flash next to a dark page) cannot be motion, however well some shift happens to match.
 const MOTION_GRADIENT_SLACK = 2;
+// A block is only treated as moving when two matches within this time agree (shift within ±1 cell, or the
+// earlier shift also explains the new frame).
+// One coincidental match between two unrelated photos in a strobe must not silence a flash.
+const MOTION_CONFIRM_MS = 120;
+// Motion cannot make a block brighter or darker on average. If the mean signed difference left after the
+// best shift is at least this, the brightness really changed (strobe while panning): count it.
+const MOTION_MAX_RESIDUAL = 0.06;
 
 // sRGB 0..255 -> linear light 0..1
 const LINEAR = new Float32Array(256);
@@ -141,6 +148,9 @@ export function createFlashDetector(config = {}) {
   const blocksX = Math.max(1, Math.round(gridW / BLOCK_W));
   const blocksY = Math.max(1, Math.round(gridH / BLOCK_H));
   const movingUntil = new Float64Array(blocksX * blocksY);
+  const lastMatchT = new Float64Array(blocksX * blocksY).fill(-Infinity);
+  const lastDx = new Int8Array(blocksX * blocksY), lastDy = new Int8Array(blocksX * blocksY);
+  const dbg = { pushes: 0, maxFlashingFraction: 0, maxFlashes: 0, movingBlocks: 0 };
   const cellBlock = new Uint16Array(n);
   for (let y = 0; y < gridH; y++) {
     for (let x = 0; x < gridW; x++) {
@@ -168,6 +178,18 @@ export function createFlashDetector(config = {}) {
     return count * 2 >= (x1 - x0) * (y1 - y0) ? sum / count : Infinity;
   }
 
+  /** mean signed (cur - prev shifted) over the block: motion leaves this near zero */
+  function blockResidual(x0, y0, x1, y1, dx, dy) {
+    let sum = 0, count = 0;
+    for (let y = Math.max(y0, -dy); y < Math.min(y1, gridH - dy); y++) {
+      for (let x = Math.max(x0, -dx); x < Math.min(x1, gridW - dx); x++) {
+        sum += cur[y * gridW + x] - prev[(y + dy) * gridW + x + dx];
+        count++;
+      }
+    }
+    return count ? sum / count : 0;
+  }
+
   /** mean spatial gradient |dx| + |dy| of the current frame inside a block */
   function blockGradient(x0, y0, x1, y1) {
     let sum = 0, count = 0;
@@ -183,25 +205,65 @@ export function createFlashDetector(config = {}) {
   }
 
   function updateMotion(t) {
+    let changed = 0, confirmedNow = 0;
+    const unexplained = []; // changed blocks no shift explained: [b, x0, y0, x1, y1]
+    const votes = new Map(); // "dx,dy" -> count, among confirmed moving blocks
     for (let by = 0; by < blocksY; by++) {
       for (let bx = 0; bx < blocksX; bx++) {
         const x0 = Math.floor((bx * gridW) / blocksX), x1 = Math.floor(((bx + 1) * gridW) / blocksX);
         const y0 = Math.floor((by * gridH) / blocksY), y1 = Math.floor(((by + 1) * gridH) / blocksY);
         const d0 = blockDiff(x0, y0, x1, y1, 0, 0, Infinity);
         if (d0 < MOTION_MIN_CHANGE) continue;
+        changed++;
+        const b = by * blocksX + bx;
         const grad = blockGradient(x0, y0, x1, y1);
-        if (d0 > (MAX_DY + 1) * grad * MOTION_GRADIENT_SLACK) continue; // too little structure to explain it
-        let best = Infinity, bestShift = 0;
+        if (d0 > (MAX_DY + 1) * grad * MOTION_GRADIENT_SLACK) {
+          unexplained.push([b, x0, y0, x1, y1]); // too little structure to explain it
+          continue;
+        }
+        let best = Infinity, bdx = 0, bdy = 0;
         for (let dy = -MAX_DY; dy <= MAX_DY; dy++) {
           for (let dx = -MAX_DX; dx <= MAX_DX; dx++) {
             if (dx === 0 && dy === 0) continue;
             const d = blockDiff(x0, y0, x1, y1, dx, dy, Math.min(best, d0 * MOTION_RATIO));
-            if (d < best) (best = d), (bestShift = Math.max(Math.abs(dx), Math.abs(dy)));
+            if (d < best) (best = d), (bdx = dx), (bdy = dy);
           }
         }
-        const explainable = d0 <= (bestShift + 1) * grad * MOTION_GRADIENT_SLACK;
-        if (best <= d0 * MOTION_RATIO && explainable) movingUntil[by * blocksX + bx] = t + MOTION_HOLD_MS;
+        const explainable = d0 <= (Math.max(Math.abs(bdx), Math.abs(bdy)) + 1) * grad * MOTION_GRADIENT_SLACK;
+        if (!(best <= d0 * MOTION_RATIO && explainable)) {
+          unexplained.push([b, x0, y0, x1, y1]);
+          continue;
+        }
+        if (Math.abs(blockResidual(x0, y0, x1, y1, bdx, bdy)) >= MOTION_MAX_RESIDUAL) continue; // brightness changed
+        // confirmed: a recent match whose shift is close, or still explains this frame (periodic text has
+        // many equally good shifts, and a flick changes speed quickly)
+        const confirmed =
+          t - lastMatchT[b] <= MOTION_CONFIRM_MS &&
+          ((Math.abs(bdx - lastDx[b]) <= 1 && Math.abs(bdy - lastDy[b]) <= 1) ||
+            blockDiff(x0, y0, x1, y1, lastDx[b], lastDy[b], d0 * MOTION_RATIO) <= d0 * MOTION_RATIO);
+        lastMatchT[b] = t;
+        lastDx[b] = bdx;
+        lastDy[b] = bdy;
+        if (confirmed) {
+          movingUntil[b] = t + MOTION_HOLD_MS;
+          confirmedNow++;
+          const key = `${bdx},${bdy}`;
+          votes.set(key, (votes.get(key) ?? 0) + 1);
+        }
       }
+    }
+
+    // Fast scrolling: the edge where new content enters has nothing to match against (its previous
+    // position is off screen). When most of the screen is clearly scrolling one way, blocks that
+    // could not be matched because the scroll shift takes them off screen are part of that scroll.
+    if (confirmedNow < 3 || confirmedNow * 2 < changed || !unexplained.length) return;
+    let dom = '', domVotes = 0;
+    for (const [k, v] of votes) if (v > domVotes) (dom = k), (domVotes = v);
+    const [ddx, ddy] = dom.split(',').map(Number);
+    for (const [b, x0, y0, x1, y1] of unexplained) {
+      const ox = Math.max(0, Math.min(x1 + ddx, gridW) - Math.max(x0 + ddx, 0));
+      const oy = Math.max(0, Math.min(y1 + ddy, gridH) - Math.max(y0 + ddy, 0));
+      if (ox * oy * 2 < (x1 - x0) * (y1 - y0)) movingUntil[b] = t + MOTION_HOLD_MS;
     }
   }
 
@@ -252,12 +314,16 @@ export function createFlashDetector(config = {}) {
       if (y < minY[reg]) minY[reg] = y;
       if (y > maxY[reg]) maxY[reg] = y;
       if (f > peak[reg]) peak[reg] = f;
+      if (f > dbg.maxFlashes) dbg.maxFlashes = f;
       cells[reg]++;
       if (isRed) redCells[reg]++;
     }
 
     prev.set(cur);
     havePrev = true;
+    dbg.pushes++;
+    dbg.maxFlashingFraction = Math.max(dbg.maxFlashingFraction, flashingCells / n);
+    for (let b = 0; b < movingUntil.length; b++) if (t < movingUntil[b]) dbg.movingBlocks++;
 
     const areaOk = flashingCells / n >= minAreaFraction;
     /** @type {import('../shared/types.js').FlashEvent[]} */
@@ -285,11 +351,27 @@ export function createFlashDetector(config = {}) {
 
   return {
     push,
+    /**
+     * Diagnostics since the last call (additive, not in the contract). Counts only.
+     * maxFlashingFraction: largest share of the screen flashing (>= maxFlashesPerSec) in one frame;
+     * maxFlashes: most flashes/s seen in a flashing cell; movingShare: average share of blocks treated as motion.
+     */
+    diagnostics() {
+      const out = {
+        maxFlashingFraction: dbg.maxFlashingFraction,
+        minAreaFraction,
+        maxFlashes: dbg.maxFlashes,
+        movingShare: dbg.pushes ? dbg.movingBlocks / dbg.pushes / movingUntil.length : 0,
+      };
+      Object.assign(dbg, { pushes: 0, maxFlashingFraction: 0, maxFlashes: 0, movingBlocks: 0 });
+      return out;
+    },
     reset() {
       lum.reset();
       red.reset();
       havePrev = false;
       movingUntil.fill(0);
+      lastMatchT.fill(-Infinity);
       held = new Array(nRegions).fill(null);
     },
   };

@@ -16,3 +16,5 @@ out/
 .DS_Store
 *.log
 .env
+# local diagnostics (numbers only)
+logs/
