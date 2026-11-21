@@ -85,19 +85,50 @@ test('red detection can be switched off (dark-red flash then has too little lumi
   assert.equal(anyEvents(run(createFlashDetector({ detectRed: false }), dim())), false);
 });
 
-test('hold: events continue after flashing stops, as inactive, then end', () => {
-  const holdMs = 1500;
-  const results = run(createFlashDetector({ holdMs }), concat(() => scenes.flash(6, 2), () => scenes.steady(5)));
+test('fast onset: 0.5 s after the first 3 Hz change, 0.25 s after the first 6 Hz change', () => {
+  // first change at 167 ms (3 Hz) / 83 ms (6 Hz); 2 full flashes later protection must be on
+  for (const [hz, limit] of [[3, 167 + 520], [6, 83 + 270]]) {
+    const hit = firstActive(run(createFlashDetector(), scenes.flash(hz)));
+    assert.ok(hit && hit.tMs <= limit, `${hz} Hz first event at ${hit?.tMs} ms`);
+  }
+});
+
+test('pause: a still frame after an even 6 Hz flash releases within 0.4 s', () => {
+  const results = run(createFlashDetector(), concat(() => scenes.flash(6, 2), () => scenes.steady(3)));
   const flashEnd = 2000;
+  const lastAny = results.filter((r) => r.events.length).at(-1).tMs;
+  assert.ok(lastAny <= flashEnd + 400, `released at ${lastAny}`);
+});
+
+test('hold: if the video keeps playing after flashing, protection holds (inactive) for about holdMs', () => {
+  const holdMs = 1500;
+  const results = run(createFlashDetector({ holdMs }), concat(() => scenes.flash(6, 2), () => scenes.normalVideo(5)));
   const lastActive = results.filter((r) => r.events.some((e) => e.active)).at(-1).tMs;
   const lastAny = results.filter((r) => r.events.length).at(-1).tMs;
-  // cells stay "flashing" until their flashes leave the 1 s window, then the hold runs
-  assert.ok(lastActive <= flashEnd + 1000, `last active ${lastActive}`);
-  assert.ok(lastAny >= lastActive + holdMs - 50, `hold ended at ${lastAny}`);
-  assert.ok(lastAny <= lastActive + holdMs + 50, `hold ended at ${lastAny}`);
+  assert.ok(lastAny >= lastActive + holdMs - 50 && lastAny <= lastActive + holdMs + 50, `active until ${lastActive}, held until ${lastAny}`);
   const holding = results.find((r) => r.tMs > lastActive && r.events.length);
   assert.ok(holding.events.every((e) => !e.active));
   assert.equal(results.at(-1).events.length, 0);
+});
+
+test('strobe light: 3 Hz, one bright frame then ~300 ms dark, stays protected between flashes', () => {
+  const gen = frames({ seconds: 4, pixel: (_x, _y, t) => (t % 333 < 34 ? [255, 255, 255] : [0, 0, 0]) });
+  const results = run(createFlashDetector(), gen);
+  const first = firstActive(results).tMs;
+  const gaps = results.filter((r) => r.tMs > first + 100 && r.tMs < 3900 && !r.events.length);
+  assert.equal(gaps.length, 0, `unprotected frames at ${gaps.map((g) => Math.round(g.tMs))}`);
+});
+
+test('bursts: flashing with short pauses stays protected', () => {
+  // 6 Hz flashing in 0.6 s bursts with 0.2 s still gaps
+  const gen = frames({
+    seconds: 4,
+    pixel: (_x, _y, t) => (t % 800 < 600 ? (Math.floor((t / 1000) * 12) % 2 ? [255, 255, 255] : [0, 0, 0]) : [0, 0, 0]),
+  });
+  const results = run(createFlashDetector(), gen);
+  const first = firstActive(results).tMs;
+  const gaps = results.filter((r) => r.tMs > first + 100 && r.tMs < 3800 && !r.events.length);
+  assert.equal(gaps.length, 0, `unprotected frames at ${gaps.map((g) => Math.round(g.tMs))}`);
 });
 
 test('reset clears state', () => {

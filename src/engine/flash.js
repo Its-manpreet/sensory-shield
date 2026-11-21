@@ -31,6 +31,21 @@ const LUM_DARK_MAX = 0.8; // WCAG: darker state must be below 0.80
 const RED_DELTA = 20; // WCAG red flash: (R-G-B)*320 changes by more than 20
 const RED_SATURATION = 0.8; // WCAG: R/(R+G+B) >= 0.8
 const WINDOW_MS = 1000;
+const EARLY_TRANSITIONS = 4; // early trigger after 2 full flashes at a dangerous rate
+const EARLY_TOLERANCE = 1.1; // allow 10% timing jitter from frame capture
+// Early trigger also needs the flash to REPEAT: the two bright levels (and the two dark levels) left
+// behind must agree within this share of the swing. Scrolling past random content does not repeat.
+const EARLY_REPEAT = 0.3;
+// A protected region that shows no change at all for this long (a paused video, a still frame) cannot
+// be flashing: release it right away instead of waiting out the window and holdMs.
+// Adaptive: 2.5x the longest recent gap between changes in that region, between STILL_MIN_MS and STILL_MS.
+// An even 6 Hz flash changes every ~85 ms, so ~210 ms of stillness already means "paused"; a short-flash
+// 3 Hz strobe is dark ~300 ms between flashes, so it gets the full STILL_MS and stays protected.
+const STILL_MS = 400;
+const STILL_MIN_MS = 150;
+const STILL_GAP_FACTOR = 2.5;
+const STILL_GAP_MEMORY_MS = 2000; // the remembered longest gap fades with this time constant (bursts with pauses keep it)
+const STILL_CODES = 2; // per-cell change of >= 2 levels (0..255 luma) counts as "something changed"
 const RING = 32; // transition timestamps kept per cell and channel; only >= 2*maxFlashesPerSec matter
 const BLOCK_W = 8; // motion blocks, in cells
 const BLOCK_H = 6;
@@ -65,10 +80,12 @@ function createTracker(n, delta, darkMax) {
   const lo = new Float32Array(n).fill(Infinity); // dir 0: min seen
   const hi = new Float32Array(n).fill(-Infinity); // dir 0: max seen
   const times = new Float64Array(n * RING).fill(-Infinity);
+  const levels = new Float32Array(n * RING); // the peak or valley each transition left behind
   const head = new Uint8Array(n);
 
-  function record(i, t) {
+  function record(i, t, level) {
     times[i * RING + head[i]] = t;
+    levels[i * RING + head[i]] = level;
     head[i] = (head[i] + 1) % RING;
   }
 
@@ -94,9 +111,10 @@ function createTracker(n, delta, darkMax) {
         if (v - ext[i] < delta || ext[i] >= darkMax) return false;
         dir[i] = 1;
       }
+      const left = d === 1 ? ext[i] : d === -1 ? ext[i] : dir[i] === -1 ? hi[i] : lo[i]; // level departed
       ext[i] = v;
       if (!count) return false;
-      record(i, t);
+      record(i, t, left);
       return true;
     },
     /** flashes (pairs of opposing transitions) in the window ending at t */
@@ -105,6 +123,24 @@ function createTracker(n, delta, darkMax) {
       const from = t - WINDOW_MS;
       for (let k = i * RING, end = k + RING; k < end; k++) if (times[k] >= from) count++;
       return count >> 1;
+    },
+    /**
+     * Early trigger: the last `k` transitions (k/2 flashes) came fast enough to imply >= `perSec` flashes
+     * per second, and the latest one is recent. Lets protection start after 2 flashes instead of waiting
+     * for 3 inside a full second (3 Hz: ~0.5 s instead of ~1 s).
+     */
+    fastRate(i, t, k, perSec) {
+      const interval = 1000 / (2 * perSec); // transition spacing at exactly perSec flashes per second
+      const base = i * RING;
+      const at = (back) => base + ((head[i] + RING - back) % RING);
+      const newest = times[at(1)];
+      const oldest = times[at(k)];
+      if (oldest === -Infinity || t - newest > interval * 1.5) return false;
+      if (newest - oldest > (k - 1) * interval * EARLY_TOLERANCE) return false;
+      // levels alternate peak/valley; same-kind levels two apart must repeat
+      const swing = Math.abs(levels[at(1)] - levels[at(2)]);
+      for (let b = 1; b + 2 <= k; b++) if (Math.abs(levels[at(b)] - levels[at(b + 2)]) > swing * EARLY_REPEAT) return false;
+      return true;
     },
     /** cheap pre-check: any transition inside the window? */
     recent(i, t) {
@@ -268,6 +304,11 @@ export function createFlashDetector(config = {}) {
   }
 
   // per-region scratch and hold state
+  const lastChange = new Float64Array(nRegions).fill(-Infinity);
+  const still = new Uint8Array(nRegions);
+  const changedNow = new Uint8Array(nRegions);
+  const longestGap = new Float64Array(nRegions).fill(STILL_MS);
+  const prevLuma = new Uint8Array(n);
   const minX = new Int16Array(nRegions), minY = new Int16Array(nRegions);
   const maxX = new Int16Array(nRegions), maxY = new Int16Array(nRegions);
   const peak = new Float32Array(nRegions);
@@ -285,23 +326,42 @@ export function createFlashDetector(config = {}) {
 
     for (let i = 0, p = 0; i < n; i++, p += 4) {
       cur[i] = 0.2126 * LINEAR[data[p]] + 0.7152 * LINEAR[data[p + 1]] + 0.0722 * LINEAR[data[p + 2]];
+      const luma = (54 * data[p] + 183 * data[p + 1] + 19 * data[p + 2]) >> 8;
+      if (!havePrev || Math.abs(luma - prevLuma[i]) >= STILL_CODES) changedNow[cellRegion[i]] = 1;
+      prevLuma[i] = luma;
+    }
+    for (let reg = 0; reg < nRegions; reg++) {
+      if (changedNow[reg]) {
+        const gap = t - lastChange[reg];
+        longestGap[reg] = Number.isFinite(gap) ? Math.max(gap, longestGap[reg] * Math.exp(-gap / STILL_GAP_MEMORY_MS)) : STILL_MS;
+        lastChange[reg] = t;
+        changedNow[reg] = 0;
+      }
+      const stillAfter = Math.min(STILL_MS, Math.max(STILL_MIN_MS, longestGap[reg] * STILL_GAP_FACTOR));
+      still[reg] = t - lastChange[reg] >= stillAfter ? 1 : 0;
     }
     if (havePrev) updateMotion(t);
 
     for (let i = 0, p = 0; i < n; i++, p += 4) {
-      const still = t >= movingUntil[cellBlock[i]];
-      lum.step(i, cur[i], t, still);
+      const notMoving = t >= movingUntil[cellBlock[i]]; // motion (scrolling) transitions are not counted
+      lum.step(i, cur[i], t, notMoving);
       if (detectRed) {
         const r = LINEAR[data[p]], g = LINEAR[data[p + 1]], b = LINEAR[data[p + 2]];
         const sum = r + g + b;
         const redValue = sum > 0 && r / sum >= RED_SATURATION ? Math.max(0, (r - g - b) * 320) : 0;
-        red.step(i, redValue, t, still);
+        red.step(i, redValue, t, notMoving);
       }
 
-      let f = lum.recent(i, t) ? lum.flashes(i, t) : 0;
+      if (still[cellRegion[i]]) continue; // nothing in this region moved for STILL_MS: not flashing
+      let f = 0;
+      if (lum.recent(i, t)) {
+        f = lum.flashes(i, t);
+        if (f < maxFlashesPerSec && lum.fastRate(i, t, EARLY_TRANSITIONS, maxFlashesPerSec)) f = maxFlashesPerSec;
+      }
       let isRed = false;
       if (detectRed && red.recent(i, t)) {
-        const fr = red.flashes(i, t);
+        let fr = red.flashes(i, t);
+        if (fr < maxFlashesPerSec && red.fastRate(i, t, EARLY_TRANSITIONS, maxFlashesPerSec)) fr = maxFlashesPerSec;
         if (fr >= maxFlashesPerSec && fr >= f) (f = fr), (isRed = true);
       }
       if (f < maxFlashesPerSec) continue;
@@ -339,7 +399,7 @@ export function createFlashDetector(config = {}) {
         const kind = redCells[reg] * 2 > cells[reg] ? 'red' : 'luminance';
         held[reg] = { rect, severity, kind, until: t + holdMs };
         events.push({ rect, severity, kind, active: true });
-      } else if (held[reg] && t < held[reg].until) {
+      } else if (held[reg] && t < held[reg].until && !still[reg]) {
         const h = held[reg];
         events.push({ rect: h.rect, severity: h.severity, kind: h.kind, active: false });
       } else {
@@ -370,6 +430,8 @@ export function createFlashDetector(config = {}) {
       lum.reset();
       red.reset();
       havePrev = false;
+      lastChange.fill(-Infinity);
+      longestGap.fill(STILL_MS);
       movingUntil.fill(0);
       lastMatchT.fill(-Infinity);
       held = new Array(nRegions).fill(null);

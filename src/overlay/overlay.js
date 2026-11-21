@@ -93,6 +93,11 @@ setInterval(() => {
 
 // --- per-frame loop ---
 let flashEvents = [];
+let lastRegions = [];
+let lastFrameAt = 0;
+// If the capture delivers no new frame (some capturers pause on a static screen, e.g. the dark gap of a
+// strobe), keep the last protection this long, like the detector's own still rule, then let it go.
+const NO_FRAME_KEEP_MS = 400;
 
 async function checkContent(now) {
   contentBusy = true;
@@ -126,12 +131,16 @@ function onFrame(now) {
 
   if (content && profile.content.enabled && !contentBusy && now - lastContentAt >= CONTENT_INTERVAL_MS) checkContent(now);
   const tiles = content && profile.content.enabled ? lastTiles : [];
-  effects.setRegions(toRegions(flashEvents, tiles, profile), now);
+  lastRegions = toRegions(flashEvents, tiles, profile);
+  lastFrameAt = now;
+  effects.setRegions(lastRegions, now);
 }
 
 // Effects redraw on every display frame so fades stay smooth even when the capture is idle.
 function onAnimationFrame(now) {
   requestAnimationFrame(onAnimationFrame);
+  const sinceFrame = now - lastFrameAt;
+  if (settings.enabled && lastRegions.length && sinceFrame > 50 && sinceFrame < NO_FRAME_KEEP_MS) effects.setRegions(lastRegions, now);
   effects.draw(now);
 }
 

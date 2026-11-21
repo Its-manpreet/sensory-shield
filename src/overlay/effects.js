@@ -7,7 +7,11 @@
 // smoothMs). Flashing therefore becomes a slow, low-contrast colour drift. That average is blurred and
 // drawn under a frosted, lightly tinted rounded panel, like a sheet of fogged glass.
 
-const HOLD_MS = 800; // a region that disappears from setRegions stays this long before fading out
+// The flash detector already holds protection while it matters and releases a paused/still area fast;
+// this only bridges a frame or two of jitter before fading out.
+const HOLD_MS = 100;
+// Protection appears fast (every extra frame of a flash matters) and leaves at the profile's fade time.
+const FADE_IN_MAX_MS = 120;
 const SMOOTH_W = 192;
 const SMOOTH_H = 108;
 
@@ -219,12 +223,13 @@ export function createEffects(canvas, video, opts = {}) {
     updateAverage(dt); // keeps running so the average is already settled when protection starts
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!video.videoWidth) return;
-    const step = fadeMs > 0 ? dt / fadeMs : 1;
+    const stepOut = fadeMs > 0 ? dt / fadeMs : 1;
+    const stepIn = Math.max(stepOut, dt / FADE_IN_MAX_MS);
     const revealing = nowMs < revealUntil;
     const dims = [], glass = [], labels = [];
     for (const [id, e] of live) {
       const wanted = !revealing && nowMs - e.seenAt <= HOLD_MS;
-      e.alpha = Math.max(0, Math.min(1, e.alpha + (wanted ? step : -step)));
+      e.alpha = Math.max(0, Math.min(1, e.alpha + (wanted ? stepIn : -stepOut)));
       if (e.alpha === 0) {
         if (!wanted && nowMs - e.seenAt > HOLD_MS) live.delete(id);
         continue;

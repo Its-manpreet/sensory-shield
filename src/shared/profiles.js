@@ -13,21 +13,21 @@ export const DEFAULT_PROFILES = {
     // player that is only partly flashing; scrolling no longer false-alarms (motion is ignored).
     flash: { enabled: true, maxFlashesPerSec: 3, minAreaFraction: 0.1, detectRed: true },
     content: { enabled: false, threshold: 0.6, categories: [], customTriggers: [] },
-    response: { fadeMs: 300, showLabel: true, blurStrengthPx: 24, dimLevel: 0.85 },
+    response: { fadeMs: 250, showLabel: true, blurStrengthPx: 24, dimLevel: 0.85 },
   },
   'graphic-sensitive': {
     id: 'graphic-sensitive',
     name: 'Graphic-content sensitive',
     flash: { enabled: true, maxFlashesPerSec: 3, minAreaFraction: 0.15, detectRed: true },
     content: { enabled: true, threshold: 0.6, categories: ['graphic-violence', 'graphic-injury'], customTriggers: [] },
-    response: { fadeMs: 300, showLabel: true, blurStrengthPx: 24, dimLevel: 0.7 },
+    response: { fadeMs: 250, showLabel: true, blurStrengthPx: 24, dimLevel: 0.7 },
   },
   custom: {
     id: 'custom',
     name: 'Custom',
     flash: { enabled: true, maxFlashesPerSec: 3, minAreaFraction: 0.15, detectRed: true },
     content: { enabled: true, threshold: 0.6, categories: ['graphic-violence', 'graphic-injury'], customTriggers: [] },
-    response: { fadeMs: 300, showLabel: true, blurStrengthPx: 24, dimLevel: 0.7 },
+    response: { fadeMs: 250, showLabel: true, blurStrengthPx: 24, dimLevel: 0.7 },
   },
 };
 
@@ -36,7 +36,7 @@ export const DEFAULT_PROFILES = {
  * @returns {import('./types.js').Settings}
  */
 /** bump when default numbers change; older saved settings are migrated in src/main/settings-file.js */
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
 
 export function defaultSettings() {
   return {
