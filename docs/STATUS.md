@@ -1,3 +1,4 @@
 # Status log (append only, newest at the bottom)
 
 A @ T+0:30 (scaffold): works: `npm install`, `npm test` (3 contract tests), `npm start` (transparent click-through overlay + tray + hotkeys + settings IPC with stubs), `npm run selftest` (both renderers load, Transformers.js 4.3.2 imports) on macOS | broken: nothing known; screen capture loop, effects, content-protection check are NOT done yet (Step 1) | need from others: D take over `src/shared/` (placeholders are in), B and C replace the stubs in `src/engine/`, keep `test/overlay-contract.test.js` passing.
+B @ flash done: works: `createFlashDetector` per contract, 16 flash tests (steady, fade, 1/2 Hz, small/15% box, normal video = no events; 3/6 Hz, red, 60 fps = active within 1 s; hold; reset). **push() = 0.07 ms per 64x36 frame** on an M-series Mac (pitch number). `npm run clips` makes FLASH-WARNING clips | broken: nothing known | need from others: A to feed real 64x36 frames and check it on live capture.

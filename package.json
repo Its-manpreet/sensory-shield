@@ -8,7 +8,8 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test test/",
-    "selftest": "SHIELD_SELFTEST=1 electron ."
+    "selftest": "SHIELD_SELFTEST=1 electron .",
+    "clips": "sh test/make-clips.sh"
   },
   "license": "UNLICENSED",
   "dependencies": {
