@@ -1,0 +1,46 @@
+<!doctype html>
+<!-- OWNER: Agent C. Page for test/content/live-latency.js: harmless trigger pictures appear at random places,
+     stay, then scroll (move smoothly), then disappear. Nothing here flashes. -->
+<meta charset="utf-8" />
+<style>
+  html, body { margin: 0; height: 100%; background: #fff; font: 16px -apple-system, sans-serif; color: #444; overflow: hidden; }
+  p { margin: 40px; max-width: 900px; }
+  img { position: fixed; width: 420px; display: none; }
+</style>
+<p>Sensory Shield placement test: a photo appears, then moves, and should stay covered by one pane.</p>
+<img id="pic" />
+<script>
+  const pic = document.getElementById('pic');
+  const IMGS = ['gun/0.jpg', 'rifle/1.jpg', 'spider/2.jpg', 'knife/3.jpg'];
+  const rounds = Number(new URLSearchParams(location.search).get('rounds') || 12);
+  const rectOf = () => {
+    const b = pic.getBoundingClientRect();
+    return JSON.stringify({ x: b.x / innerWidth, y: b.y / innerHeight, w: b.width / innerWidth, h: b.height / innerHeight });
+  };
+  const frame = () => new Promise((r) => requestAnimationFrame(r));
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function run() {
+    for (let n = 0; n < rounds; n++) {
+      pic.src = `../../assets/images/eval/${IMGS[n % IMGS.length]}`;
+      await pic.decode();
+      const x = 40 + Math.random() * (innerWidth - 500), y0 = 80 + Math.random() * (innerHeight - 700);
+      Object.assign(pic.style, { left: `${x}px`, top: `${y0}px`, display: 'block' });
+      await frame();
+      await frame(); // painted
+      console.log(`SHOWN ${Date.now()} ${rectOf()}`);
+      await wait(1600);
+      // scroll: move 260 px down over 0.8 s, like a page being scrolled
+      const t0 = performance.now();
+      for (let t = 0; t <= 800; t = performance.now() - t0) {
+        pic.style.top = `${y0 + 260 * (t / 800)}px`;
+        await frame();
+        console.log(`POS ${Date.now()} ${rectOf()}`);
+      }
+      await wait(700);
+      pic.style.display = 'none';
+      await wait(1000);
+    }
+    console.log('ROUNDS DONE');
+  }
+  run();
+</script>

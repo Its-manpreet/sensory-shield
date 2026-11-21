@@ -10,6 +10,10 @@
 // The flash detector already holds protection while it matters and releases a paused/still area fast;
 // this only bridges a frame or two of jitter before fading out.
 const HOLD_MS = 100;
+// free-form content panes leave fast: the content loop already decided the picture is gone, and the cells
+// fade there (60 ms); a whole pane that disappears (scrolled off, switched away) gets the same quick fade
+const SHAPE_HOLD_MS = 20;
+const SHAPE_FADE_MS = 60;
 // Protection appears at full strength at once (every frame of a flash matters) and leaves gently, at the
 // profile's fade time.
 const SMOOTH_W = 192;
@@ -121,7 +125,14 @@ export function createEffects(canvas, video, opts = {}) {
     if (saturate !== 1) filters.push(`saturate(${saturate})`);
     if (blurPx) filters.push(`blur(${Math.round(blurPx * dpr)}px)`);
     if (filters.length) ctx.filter = filters.join(' ');
-    ctx.drawImage(fog, 0, 0, SMOOTH_W, SMOOTH_H, 0, 0, canvas.width, canvas.height);
+    // Only the panel (plus a margin for the blur to pull from) is drawn and filtered. Drawing the whole
+    // screen and clipping made the GPU blur 2940x1912 pixels every frame, which slowed the content models
+    // sharing the GPU 3-7x while a blur was showing.
+    const m = 3 * (blurPx || 2) * dpr;
+    const kx = SMOOTH_W / canvas.width, ky = SMOOTH_H / canvas.height;
+    const x0 = Math.max(0, x - m), y0 = Math.max(0, y - m);
+    const x1 = Math.min(canvas.width, x + w + m), y1 = Math.min(canvas.height, y + h + m);
+    ctx.drawImage(fog, x0 * kx, y0 * ky, (x1 - x0) * kx, (y1 - y0) * ky, x0, y0, x1 - x0, y1 - y0);
     ctx.filter = 'none';
 
     // milky tint with a gentle top-left sheen
@@ -143,6 +154,98 @@ export function createEffects(canvas, video, opts = {}) {
     ctx.beginPath();
     ctx.roundRect(x + 0.5 * dpr, y + 0.5 * dpr, w - dpr, h - dpr, r);
     ctx.stroke();
+    ctx.restore();
+  }
+
+  // free-form content panes (region.shape): drawn at half resolution into a layer, cut to a soft blob
+  const layer = new OffscreenCanvas(1, 1);
+  const lctx = /** @type {OffscreenCanvasRenderingContext2D} */ (layer.getContext('2d'));
+  const maskCanvas = new OffscreenCanvas(1, 1);
+  const mctx = /** @type {OffscreenCanvasRenderingContext2D} */ (maskCanvas.getContext('2d'));
+  // quarter resolution: the layer is blurred heavily anyway, and a big blob drawn at half resolution every
+  // frame competed with the content models for the GPU (checks ran several times slower)
+  const LAYER_SCALE = 0.25;
+
+  /**
+   * One free-form frosted pane. The shape's cells are drawn slightly enlarged with round corners and the mask
+   * is softened, so neighbouring cells melt into one blob whose outline follows the object; each cell's alpha
+   * lets parts fade out while the rest stays (the shape morphs).
+   * @param {{ x: number, y: number, cw: number, ch: number, cols: number, rows: number, alpha: Float32Array }} shape
+   */
+  function paintShape(rect, shape, alpha, { blurPx, tint }) {
+    const dpr = devicePixelRatio, cw = canvas.width, chh = canvas.height;
+    const cellW = shape.cw * cw, cellH = shape.ch * chh;
+    const margin = Math.max(cellW, cellH);
+    const x0 = Math.max(0, Math.floor(rect.x * cw - margin)), y0 = Math.max(0, Math.floor(rect.y * chh - margin));
+    const x1 = Math.min(cw, Math.ceil((rect.x + rect.w) * cw + margin)), y1 = Math.min(chh, Math.ceil((rect.y + rect.h) * chh + margin));
+    if (x1 - x0 < 2 || y1 - y0 < 2) return;
+    const k = LAYER_SCALE, lw = Math.ceil((x1 - x0) * k), lh = Math.ceil((y1 - y0) * k);
+    if (layer.width < lw || layer.height < lh) Object.assign(layer, { width: Math.max(layer.width, lw), height: Math.max(layer.height, lh) });
+    if (maskCanvas.width < lw || maskCanvas.height < lh) Object.assign(maskCanvas, { width: Math.max(maskCanvas.width, lw), height: Math.max(maskCanvas.height, lh) });
+
+    // 1. the fogged screen behind the pane, heavily blurred, with a milky tint
+    lctx.save();
+    lctx.clearRect(0, 0, lw, lh);
+    lctx.beginPath();
+    lctx.rect(0, 0, lw, lh);
+    lctx.clip();
+    const m = 3 * blurPx * dpr;
+    const kx = SMOOTH_W / cw, ky = SMOOTH_H / chh;
+    const fx0 = Math.max(0, x0 - m), fy0 = Math.max(0, y0 - m), fx1 = Math.min(cw, x1 + m), fy1 = Math.min(chh, y1 + m);
+    lctx.filter = `blur(${Math.round(blurPx * dpr * k)}px)`;
+    lctx.drawImage(fog, fx0 * kx, fy0 * ky, (fx1 - fx0) * kx, (fy1 - fy0) * ky, (fx0 - x0) * k, (fy0 - y0) * k, (fx1 - fx0) * k, (fy1 - fy0) * k);
+    lctx.filter = 'none';
+    lctx.fillStyle = `rgba(255, 255, 255, ${0.18 + tint})`;
+    lctx.fillRect(0, 0, lw, lh);
+    lctx.globalAlpha = 0.045;
+    lctx.fillStyle = noisePattern;
+    lctx.fillRect(0, 0, lw, lh);
+    lctx.globalAlpha = 1;
+
+    // 2. the shape: enlarged round cells (they overlap into one blob), then softened once
+    mctx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+    const grow = 0.2, r = 0.5 * Math.min(cellW, cellH) * k;
+    // fully shown cells as ONE path (thousands of small cells per pane), fading ones one by one
+    const cellPath = (path, i) => {
+      const c = i % shape.cols, row = (i / shape.cols) | 0;
+      const px0 = ((shape.x + c * shape.cw) * cw - x0) * k, py0 = ((shape.y + row * shape.ch) * chh - y0) * k;
+      path.roundRect(px0 - grow * cellW * k, py0 - grow * cellH * k, (1 + 2 * grow) * cellW * k, (1 + 2 * grow) * cellH * k, r);
+    };
+    const solid = new Path2D();
+    for (let i = 0; i < shape.alpha.length; i++) {
+      const a = shape.alpha[i];
+      if (a >= 1) cellPath(solid, i);
+      else if (a > 0) {
+        const one = new Path2D();
+        cellPath(one, i);
+        mctx.fillStyle = `rgba(0, 0, 0, ${a})`;
+        mctx.fill(one);
+      }
+    }
+    mctx.fillStyle = '#000';
+    mctx.fill(solid, 'nonzero');
+
+    lctx.globalCompositeOperation = 'destination-in';
+    lctx.filter = `blur(${Math.max(1, Math.round(0.18 * Math.min(cellW, cellH) * k))}px)`;
+    lctx.drawImage(maskCanvas, 0, 0, lw, lh, 0, 0, lw, lh);
+    // a picture on a page: a HARD cut at the picture's exact border, after the softening (cells are coarser
+    // than the gap to a caption; a soft cut would let the picture's edge show through)
+    if (shape.clip) {
+      const c = shape.clip;
+      lctx.filter = 'none';
+      lctx.fillStyle = '#000';
+      lctx.fillRect(Math.floor((c.x * cw - x0) * k), Math.floor((c.y * chh - y0) * k), Math.ceil(c.w * cw * k) + 1, Math.ceil(c.h * chh * k) + 1);
+    }
+    lctx.restore();
+
+    // 3. onto the screen, lifted by a soft shadow that follows the outline
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+    ctx.shadowBlur = 24 * dpr;
+    ctx.shadowOffsetY = 6 * dpr;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(layer, 0, 0, lw, lh, x0, y0, x1 - x0, y1 - y0);
     ctx.restore();
   }
 
@@ -234,14 +337,19 @@ export function createEffects(canvas, video, opts = {}) {
     const revealing = nowMs < revealUntil;
     const dims = [], glass = [], labels = [];
     for (const [id, e] of live) {
-      const wanted = !revealing && nowMs - e.seenAt <= HOLD_MS;
-      e.alpha = wanted ? 1 : Math.max(0, e.alpha - stepOut);
+      const hold = e.region.shape ? SHAPE_HOLD_MS : HOLD_MS;
+      const wanted = !revealing && nowMs - e.seenAt <= hold;
+      e.alpha = wanted ? 1 : Math.max(0, e.alpha - (e.region.shape ? dt / SHAPE_FADE_MS : stepOut));
       if (e.alpha === 0) {
-        if (!wanted && nowMs - e.seenAt > HOLD_MS) live.delete(id);
+        if (!wanted && nowMs - e.seenAt > hold) live.delete(id);
         continue;
       }
       const { effect } = e.region;
-      if (effect === 'blur') {
+      if (effect === 'blur' && e.region.shape) {
+        const k = e.region.strength;
+        paintShape(e.region.rect, e.region.shape, e.alpha, { blurPx: 14 + 30 * k, tint: 0.12 + 0.1 * k });
+        if (labelsVisible && e.region.reason) labels.push({ rect: e.region.rect, reason: e.region.reason, alpha: e.alpha });
+      } else if (effect === 'blur') {
         const [x, y, w, h] = px(e.region.rect).d;
         const inset = 4 * devicePixelRatio; // neighbouring tiles read as separate frosted panes
         // content the user asked to hide: much heavier than the flash glass, so shapes are not recognisable

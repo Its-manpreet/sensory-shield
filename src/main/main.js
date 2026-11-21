@@ -1,9 +1,11 @@
 // OWNER: Agent A. Electron main process: overlay + settings windows, tray, hotkeys, IPC, capture permission.
 import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, screen, session, desktopCapturer, nativeImage, systemPreferences, shell } from 'electron';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { loadSettings, saveSettings } from './settings-file.js';
 import { createVolumeControl } from './volume.js';
+import { createOcr, ocrHelperPath } from './ocr.js';
+import { createGuardian } from './guardian.js';
 
 // System audio capture ("loopback") for sound protection. Windows supports it out of the box; on macOS
 // Chromium has it behind these features (ScreenCaptureKit, macOS 13+). No extra install either way.
@@ -16,7 +18,7 @@ const SELFTEST = process.env.SHIELD_SELFTEST === '1'; // `npm run selftest`: log
 const SPIKE = process.env.SHIELD_SPIKE === '1'; // `npm run spike`: feedback-loop check, see src/overlay/spike.js
 const ALLOW_NETWORK = process.env.SHIELD_ALLOW_NETWORK === '1'; // dev only; the app must work with this OFF
 
-export const HOTKEYS = { reveal: 'CommandOrControl+Alt+R', toggle: 'CommandOrControl+Alt+S', settings: 'CommandOrControl+Alt+,' };
+export const HOTKEYS = { reveal: 'CommandOrControl+Alt+R', toggle: 'CommandOrControl+Alt+S', settings: 'CommandOrControl+Alt+,', help: 'CommandOrControl+Alt+H' };
 const REVEAL_MS = 5000;
 
 let settings;
@@ -26,6 +28,9 @@ let tray = null;
 let lastStats = null;
 let revealUntil = 0;
 let volume = null; // created when the app is ready (macOS: system volume control)
+let ocr = null; // on-device text recognition for explicit-text protection, started on first use
+let guardian = null; // webcam Guardian (src/main/guardian.js): camera window, "Are you OK?" check, alerts
+let ocrBoxes = null; // fast text detection (boxes only) so the picture model never judges written words
 
 /** reveal hotkey: show everything for REVEAL_MS; pressing it again while revealed ends the reveal early */
 function toggleReveal() {
@@ -66,7 +71,9 @@ function createOverlay() {
   overlayWin.setIgnoreMouseEvents(true); // clicks pass through to apps below
   overlayWin.setContentProtection(true); // keep the overlay out of our own capture (VERIFY per OS, see CLAUDE.md)
   forwardConsole(overlayWin, 'overlay');
-  const query = {};
+  // content models: resources/models in the packaged app, models/ in development (npm run content:setup)
+  const models = app.isPackaged ? path.join(process.resourcesPath, 'models') : path.join(SRC, '..', 'models');
+  const query = { models: `${pathToFileURL(models).href}/` };
   if (SELFTEST) query.selftest = '1';
   if (SPIKE) query.spike = '1';
   if (process.env.SHIELD_DEBUG === '1') query.debug = '1';
@@ -81,6 +88,7 @@ function createOverlay() {
     }
   };
   overlayWin.webContents.on('did-finish-load', fit);
+  overlayWin.webContents.on('did-finish-load', () => ((sendOwnWindows.last = null), sendOwnWindows()));
   overlayWin.on('move', fit);
   overlayWin.on('resize', fit);
   screen.on('display-metrics-changed', fit);
@@ -102,7 +110,30 @@ function openSettings() {
     webPreferences: { preload: PRELOAD, sandbox: true, contextIsolation: true },
   });
   forwardConsole(settingsWin, 'settings');
+  // the overlay never analyses our own window (its labels say "sexual writing", "spiders"...)
+  for (const ev of ['focus', 'blur', 'show', 'hide', 'minimize', 'restore', 'move', 'resize', 'enter-full-screen', 'leave-full-screen']) settingsWin.on(ev, sendOwnWindows);
+  settingsWin.on('closed', () => setImmediate(sendOwnWindows));
   settingsWin.loadFile(path.join(SRC, 'settings/index.html'));
+}
+
+/**
+ * Tell the overlay where our settings window is (normalized to the captured primary display), while it is
+ * in front. Only while focused: an unfocused window may be behind another app whose content must still be
+ * checked. Rects only, no pixels.
+ */
+function sendOwnWindows() {
+  if (!overlayWin || overlayWin.isDestroyed()) return;
+  const rects = [];
+  const w = settingsWin;
+  if (w && !w.isDestroyed() && w.isVisible() && !w.isMinimized() && w.isFocused()) {
+    const d = screen.getPrimaryDisplay().bounds, b = w.getBounds();
+    const x0 = Math.max(d.x, b.x), y0 = Math.max(d.y, b.y), x1 = Math.min(d.x + d.width, b.x + b.width), y1 = Math.min(d.y + d.height, b.y + b.height);
+    if (x1 > x0 && y1 > y0) rects.push({ x: (x0 - d.x) / d.width, y: (y0 - d.y) / d.height, w: (x1 - x0) / d.width, h: (y1 - y0) / d.height });
+  }
+  const key = JSON.stringify(rects);
+  if (key === sendOwnWindows.last) return;
+  sendOwnWindows.last = key;
+  overlayWin.webContents.send('shield:own-windows', rects);
 }
 
 function setEnabled(enabled) {
@@ -126,6 +157,7 @@ function refreshTray() {
       { label: settings.enabled ? 'Turn shield off' : 'Turn shield on', click: () => setEnabled(!settings.enabled) },
       { label: `Reveal for ${REVEAL_MS / 1000} s`, accelerator: HOTKEYS.reveal, click: toggleReveal },
       { label: 'Settings…', click: openSettings },
+      ...(settings.guardian?.enabled ? [{ label: 'Send help alert now', accelerator: HOTKEYS.help, click: () => guardian?.sos() }] : []),
       { type: 'separator' },
       { label: 'Quit', role: 'quit' },
     ]),
@@ -149,6 +181,7 @@ function registerIpc() {
     settings = { ...settings, ...patch };
     saveSettings(settings);
     broadcast('settings:changed', settings);
+    if ('guardian' in patch) guardian?.sync();
     refreshTray();
     return settings;
   });
@@ -163,6 +196,22 @@ function registerIpc() {
   // sound protection: the overlay decides how far below the user's volume to go; main applies it
   ipcMain.on('audio:gain', (_e, { gainDb }) => {
     if (settings.enabled) volume?.applyGain(gainDb);
+  });
+  // explicit-text protection: grayscale screen pixels in, recognized lines out. Memory only; never logged.
+  ipcMain.handle('ocr:recognize', async (_e, frame) => {
+    if (!settings.enabled || !settings.safety?.enabled || !settings.safety?.sexualText) return { lines: [], ms: 0, available: true };
+    ocr ??= createOcr(ocrHelperPath(SRC));
+    if (!ocr.available) return { lines: [], ms: 0, available: false };
+    return { ...(await ocr.recognize(frame)), available: true };
+  });
+  // picture protection: where is text in this area? Boxes only (the words are dropped here). Memory only.
+  // A separate fast helper, so it never waits behind the accurate explicit-text reads.
+  ipcMain.handle('ocr:boxes', async (_e, frame) => {
+    if (!settings.enabled || !settings.safety?.enabled) return { boxes: [], available: true };
+    ocrBoxes ??= createOcr(ocrHelperPath(SRC), { level: 'fast' });
+    if (!ocrBoxes.available) return { boxes: [], available: false };
+    const r = await ocrBoxes.recognize(frame);
+    return { boxes: r.lines.map(({ x, y, w, h }) => ({ x, y, w, h })), available: true };
   });
   ipcMain.on('shield:stats', (_e, stats) => {
     lastStats = stats; // counts only, never pixels
@@ -214,11 +263,22 @@ app.whenReady().then(() => {
   // SHIELD_NO_VOLUME=1 (tests): decide everything, but never touch the real system volume
   volume = process.env.SHIELD_NO_VOLUME === '1' ? null : createVolumeControl();
   registerIpc();
+  guardian = createGuardian({
+    getSettings: () => settings,
+    preload: PRELOAD,
+    src: SRC,
+    onChange: () => {
+      if (settingsWin && !settingsWin.isDestroyed()) settingsWin.webContents.send('guardian:status', guardian.status());
+      refreshTray();
+    },
+  });
+  guardian.sync();
   createOverlay();
   createTray();
   globalShortcut.register(HOTKEYS.reveal, toggleReveal);
   globalShortcut.register(HOTKEYS.toggle, () => setEnabled(!settings.enabled));
   globalShortcut.register(HOTKEYS.settings, openSettings);
+  globalShortcut.register(HOTKEYS.help, () => guardian?.sos());
   openSettings(); // the window is the app's face; closing it leaves the shield running in the tray
   if (SELFTEST) {
     setTimeout(() => app.quit(), SPIKE ? 9000 : Number(process.env.SHIELD_SELFTEST_MS) || 6000);
@@ -228,5 +288,8 @@ app.whenReady().then(() => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
   volume?.stop(); // puts the user's own volume back
+  ocr?.stop();
+  ocrBoxes?.stop();
+  guardian?.stop();
 });
 app.on('window-all-closed', () => {}); // keep running in the tray

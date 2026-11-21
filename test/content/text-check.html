@@ -1,0 +1,46 @@
+<!doctype html>
+<!-- OWNER: Agent C. Does the explicit-text classifier understand context? Run:
+       npx electron test/content/run-page.js test/content/text-check.html
+     The same word ("sex", "breast", "naked", "hard"...) in harmless and in explicit sentences. The explicit
+     lines are mild, written for this test (no real media). Prints the score per line and PASS/FAIL. -->
+<meta charset="utf-8" />
+<title>Explicit text check</title>
+<script type="importmap">
+  {
+    "imports": {
+      "@huggingface/transformers": "../../node_modules/@huggingface/transformers/dist/transformers.web.js",
+      "onnxruntime-web/webgpu": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs",
+      "onnxruntime-common": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs"
+    }
+  }
+</script>
+<script type="module">
+  import { createTextSafety } from '../../src/engine/text-safety.js';
+  import { TEXT_CASES, HELDOUT_CASES } from './text-cases.js';
+
+  const log = (...a) => console.log('[text]', ...a);
+  try {
+    const ts = await createTextSafety({ modelsUrl: new URL('../../models/', location.href).href });
+    log('ready', JSON.stringify(ts.info));
+    for (const [name, CASES] of [['tuning set', TEXT_CASES], ['HELD-OUT set', HELDOUT_CASES]]) {
+    const scores = await ts.scoreTexts(CASES.map((c) => c.text));
+    let pass = 0;
+    CASES.forEach((c, i) => {
+      const flagged = scores[i] >= ts.threshold;
+      const ok = flagged === c.explicit;
+      pass += ok;
+      log(`${ok ? 'ok  ' : 'MISS'} ${scores[i].toFixed(3)} ${c.explicit ? 'explicit' : 'safe    '}  ${c.text.slice(0, 90)}`);
+    });
+    log(`${name}: ${pass}/${CASES.length} correct at threshold ${ts.threshold}`);
+    }
+    const t0 = performance.now();
+    for (let i = 0; i < 10; i++) await ts.scoreTexts(TEXT_CASES.slice(0, 16).map((c) => c.text));
+    log(`16 harmless lines: ${((performance.now() - t0) / 10).toFixed(1)} ms`);
+    const t1 = performance.now();
+    for (let i = 0; i < 10; i++) await ts.scoreTexts(TEXT_CASES.slice(16).map((c) => c.text));
+    log(`8 explicit lines (both stages): ${((performance.now() - t1) / 10).toFixed(1)} ms`);
+  } catch (err) {
+    log('FAILED', err?.stack ?? err);
+  }
+  log('DONE');
+</script>

@@ -1,7 +1,8 @@
 // OWNER: Agent A. Overlay renderer: capture -> sensory detectors -> regions -> effects. Frames live in memory only.
 //   every frame: flashes + red flashes + red/blue colour flicker (64x36)
 //   every 50 ms: loudness of the sound playing (system audio) -> system volume turned down when needed
-// (Content detection is removed for now; see git tag vision-v1.)
+//   child safety (content-loop.js): changed tiles -> nudity / gore / weapons / phobias / custom words blurred,
+//     explicit text read on-device and blurred
 import { createFlashDetector } from '../engine/flash.js';
 import { createLoudnessGuard } from '../engine/loudness.js';
 import { activeProfile } from '../shared/profiles.js';
@@ -9,6 +10,7 @@ import { getSettings, onChange } from '../shared/store.js';
 import { createEffects } from './effects.js';
 import { toRegions } from './regions.js';
 import { startCapture, createSampler, createSoundMeter } from './capture.js';
+import { createContentLoop } from './content-loop.js';
 
 const video = /** @type {HTMLVideoElement} */ (document.getElementById('capture'));
 const canvas = /** @type {HTMLCanvasElement} */ (document.getElementById('fx'));
@@ -26,6 +28,27 @@ let flash = createFlashDetector(flashConfig(profile, settings));
 const sampler = createSampler(video);
 let captureState = 'starting'; // 'starting' | 'ok' | 'denied'
 
+// --- child safety: models load in the background; flash and sound protection never wait for them ---
+let contentRegions = [];
+const content = createContentLoop({
+  video,
+  sampler,
+  modelsUrl: params.get('models') ?? new URL('../../models/', location.href).href,
+  log,
+  debug: debug || selftest,
+  onUpdate: () => {
+    // new results: show them now, not on the next frame
+    const before = new Set(contentRegions.map((r) => r.id));
+    contentRegions = content.regions(profile);
+    // latency test (test/content/live-latency.js): wall-clock time each new blur is published; ids/rects only
+    if (selftest) for (const r of contentRegions) if (!before.has(r.id)) log(`BLUR ${Date.now()} ${r.reason} ${JSON.stringify(r.rect)}`);
+    if (effects.setRegions(contentRegions, performance.now())) effects.draw(performance.now());
+  },
+});
+content.apply(settings.safety);
+// live placement test (test/content/live-latency.js): where the content panes are, 20x a second; rects only
+if (selftest) setInterval(() => contentRegions.length && log(`PANES ${Date.now()} ${JSON.stringify(contentRegions.map((r) => r.rect))}`), 50);
+
 function applySettings(s) {
   const prevFlash = JSON.stringify(flashConfig(profile, settings));
   settings = s;
@@ -33,10 +56,14 @@ function applySettings(s) {
   if (JSON.stringify(flashConfig(profile, s)) !== prevFlash) flash = createFlashDetector(flashConfig(profile, s));
   effects.setStyle({ fadeMs: profile.response.fadeMs, ...s.appearance });
   effects.setLabelsVisible(profile.response.showLabel);
+  content.apply(s.enabled ? s.safety : { ...s.safety, enabled: false });
+  if (!s.enabled || !s.safety?.enabled) content.clear();
+  contentRegions = content.regions(profile);
   if (!s.enabled) effects.clear();
 }
 onChange(applySettings);
 window.shield?.onReveal(({ ms }) => effects.revealAll(ms));
+window.shield?.onOwnWindows?.((rects) => content.setOwnWindows(rects));
 window.shield?.onToggle(({ enabled }) => applySettings({ ...settings, enabled }));
 
 // --- stats (counts only) ---
@@ -44,12 +71,16 @@ const stats = { frames: 0, flashMs: 0, engineMs: 0, since: performance.now() };
 setInterval(() => {
   const now = performance.now();
   const secs = (now - stats.since) / 1000;
+  const cs = content.stats();
   const out = {
     fps: stats.frames / secs,
     flashMs: stats.frames ? stats.flashMs / stats.frames : 0,
-    modelMs: 0, // no content model for now
-    modelHz: 0,
-    device: 'off',
+    modelMs: cs.modelMs, // one picture check (changed tiles), ms
+    modelHz: cs.modelHz / secs, // picture checks per second
+    firstMs: cs.firstMs, // check start -> first blur published, ms
+    textMs: cs.textMs, // one text check (OCR + text models), ms
+    textHz: cs.textHz / secs,
+    device: cs.device,
     capture: captureState,
     sound: soundState, // 'off' | 'on' | 'unavailable'
     soundCutDb: lastGainDb, // how far below the user's volume right now (0 = untouched)
@@ -88,8 +119,11 @@ function onFrame(now) {
   stats.engineMs += performance.now() - t0;
   lastRegions = toRegions(flashEvents, profile, sens);
   lastFrameAt = now;
+  content.tick(data); // starts a picture / text check when the screen changed and none is running
+  contentRegions = content.regions(profile);
   // new protection is drawn right here, in the frame that detected it, instead of on the next display frame
-  if (effects.setRegions(lastRegions, now)) effects.draw(performance.now());
+  const added = effects.setRegions(lastRegions, now);
+  if (effects.setRegions(contentRegions, now) || added) effects.draw(performance.now());
 }
 
 // Effects redraw on every display frame so fades stay smooth even when the capture is idle.
@@ -97,13 +131,20 @@ function onAnimationFrame(now) {
   requestAnimationFrame(onAnimationFrame);
   const sinceFrame = now - lastFrameAt;
   if (settings.enabled && lastRegions.length && sinceFrame > 50 && sinceFrame < NO_FRAME_KEEP_MS) effects.setRegions(lastRegions, now);
+  // content blurs hold while the screen is still (the capturer may send no frames then): they end only when
+  // the area changes and is re-checked as safe
+  // recomputed every display frame: pane parts fade out on time even when the capture sends no frames
+  if (settings.enabled && contentRegions.length) {
+    contentRegions = content.regions(profile);
+    effects.setRegions(contentRegions, now);
+  }
   effects.draw(now);
 }
 
 // --- sound: loudness of what is playing -> how far to turn the system volume down (main applies it) ---
 let soundState = 'off';
 let lastGainDb = 0;
-const loudnessConfig = (s) => ({ limiter: !!s.sensory?.loudLimiter, leveling: !!s.sensory?.loudLeveling, softStart: !!s.sensory?.softStart });
+const loudnessConfig = (s) => ({ limiter: !!s.sensory?.loudLimiter, leveling: !!s.sensory?.loudLeveling, softStart: !!s.sensory?.softStart, harsh: !!s.sensory?.harshTones });
 let loudness = createLoudnessGuard(loudnessConfig(settings));
 let loudnessKey = JSON.stringify(loudnessConfig(settings));
 async function startSound(stream) {
@@ -116,15 +157,16 @@ async function startSound(stream) {
   if (!meter) return void (soundState = 'unavailable');
   soundState = 'on';
   let lastSent = 0;
-  meter.onLevel((levelNow, now) => {
+  meter.onLevel((reading, now) => {
+    const levelNow = reading.levelDb;
     const key = JSON.stringify(loudnessConfig(settings));
     if (key !== loudnessKey) (loudness = createLoudnessGuard(loudnessConfig(settings))), (loudnessKey = key);
-    const anyOn = settings.enabled && (settings.sensory?.loudLimiter || settings.sensory?.loudLeveling || settings.sensory?.softStart);
-    const { gainDb } = anyOn ? loudness.push({ levelDb: levelNow, tMs: now }) : { gainDb: 0 };
+    const anyOn = settings.enabled && (settings.sensory?.loudLimiter || settings.sensory?.loudLeveling || settings.sensory?.softStart || settings.sensory?.harshTones);
+    const { gainDb, reason } = anyOn ? loudness.push({ ...reading, tMs: now }) : { gainDb: 0, reason: null };
     // send on a real change (0.5 dB), and at least twice a second while turned down
     if (Math.abs(gainDb - lastGainDb) >= 0.5 || (gainDb < 0 && now - lastSent > 500) || (gainDb === 0 && lastGainDb !== 0)) {
       window.shield?.sendAudioGain(gainDb);
-      if ((selftest || debug) && Math.abs(gainDb - lastGainDb) >= 0.5) log(`sound: level ${levelNow.toFixed(0)} dBFS -> volume ${gainDb < 0 ? `down ${(-gainDb).toFixed(1)} dB` : 'back to yours'}`);
+      if ((selftest || debug) && Math.abs(gainDb - lastGainDb) >= 0.5) log(`sound: loudness ${levelNow.toFixed(0)}, tone ${reading.toneHz?.toFixed(0)} Hz ${reading.toneDb?.toFixed(0)} dB (share ${reading.toneShareDb?.toFixed(0)}, sharp ${reading.toneSharpDb?.toFixed(1)}) -> volume ${gainDb < 0 ? `down ${(-gainDb).toFixed(1)} dB (${reason})` : 'back to yours'}`);
       lastSent = now;
       lastGainDb = gainDb;
     }

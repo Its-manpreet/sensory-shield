@@ -22,3 +22,5 @@ logs/
 # llama.cpp binaries, fetched per platform by npm run vision:setup
 vendor/
 dist/
+# content calibration images (Wikimedia, see manifest.json), fetched by test/content/fetch-eval-images.js
+assets/images/eval/

@@ -13,6 +13,16 @@
   <body>
     <video id="capture" muted playsinline></video>
     <canvas id="fx"></canvas>
+    <!-- on-device models (child safety): Transformers.js + ONNX Runtime Web, loaded from node_modules -->
+    <script type="importmap">
+      {
+        "imports": {
+          "@huggingface/transformers": "../../node_modules/@huggingface/transformers/dist/transformers.web.js",
+          "onnxruntime-web/webgpu": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs",
+          "onnxruntime-common": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs"
+        }
+      }
+    </script>
     <script type="module" src="./overlay.js"></script>
   </body>
 </html>

@@ -14,7 +14,7 @@ const stdin = $.NSFileHandle.fileHandleWithStandardInput;
 let buf = '';
 for (;;) {
   const data = stdin.availableData;
-  if (data.length === 0) break;
+  if (Number(data.length) === 0) break; // JXA gives length as a STRING: '=== 0' never matched, so an orphaned helper spun at 100% CPU
   buf += $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js;
   let i;
   while ((i = buf.indexOf('\\n')) >= 0) {

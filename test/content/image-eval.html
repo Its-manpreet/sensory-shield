@@ -1,0 +1,227 @@
+<!doctype html>
+<!-- OWNER: Agent C. Picture-model evaluation on composite "screens" (a fake web page with one photo on it):
+       node test/content/fetch-eval-images.js   (once)
+       npx electron test/content/run-page.js test/content/image-eval.html [sens=0.5]
+     Uses the app's real tiles (4x3 + half-offset) and decisions. Reports per class: found / false alarms,
+     and the timing of one full-screen check. -->
+<meta charset="utf-8" />
+<title>Picture eval</title>
+<script type="importmap">
+  { "imports": {
+      "@huggingface/transformers": "../../node_modules/@huggingface/transformers/dist/transformers.web.js",
+      "onnxruntime-web/webgpu": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs",
+      "onnxruntime-common": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs" } }
+</script>
+<script type="module">
+  import { createContentDetector } from '../../src/engine/content.js';
+  import { triggersFor } from '../../src/engine/categories.js';
+  import { picturesAround } from '../../src/engine/panes.js';
+  import { maskText } from '../../src/overlay/text-mask.js';
+
+  const log = (...a) => console.log('[eval]', ...a);
+  const q = new URLSearchParams(location.search);
+  const sens = Number(q.get('sens') ?? 0.5);
+  const W = 1470, H = 956;
+  const screen = new OffscreenCanvas(W, H);
+  const ctx = screen.getContext('2d');
+  // the app's tile layout (src/overlay/content-loop.js)
+  const tiles = [];
+  for (let y = 0; y < 3; y++) for (let x = 0; x < 4; x++) tiles.push({ x: x / 4, y: y / 3, w: 1 / 4, h: 1 / 3 });
+  for (let y = 0; y < 2; y++) for (let x = 0; x < 3; x++) tiles.push({ x: (x + 0.5) / 4, y: (y + 0.5) / 3, w: 1 / 4, h: 1 / 3 });
+
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  function page() {
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#f2f2f2';
+    ctx.fillRect(0, 0, W, 56);
+    ctx.fillStyle = '#333';
+    ctx.font = '600 22px -apple-system, sans-serif';
+    ctx.fillText('Daily Reader — latest stories', 40, 36);
+    ctx.font = '15px -apple-system, sans-serif';
+    ctx.fillStyle = '#444';
+    const words = 'the of and to in a is that for on with as was by at from this have are not but one all they an'.split(' ');
+    for (let y = 100; y < H - 20; y += 24) {
+      let line = '';
+      while (line.length < 160) line += words[Math.floor(rnd() * words.length)] + ' ';
+      ctx.fillText(line, 40, y);
+    }
+  }
+  async function bitmap(path) {
+    const res = await fetch(path);
+    return createImageBitmap(await res.blob());
+  }
+  // the overlay's picture gate (content-loop.js textOnly): a hit on a page area with no picture block is text
+  const gw = W >> 1, gh = H >> 1, gcan = new OffscreenCanvas(gw, gh), gctx = gcan.getContext('2d', { willReadFrequently: true });
+  function gray() {
+    gctx.drawImage(screen, 0, 0, gw, gh);
+    const m = gctx.getImageData(0, 0, gw, gh).data, g = new Uint8Array(gw * gh);
+    for (let k = 0, p = 0; k < g.length; k++, p += 4) g[k] = (54 * m[p] + 183 * m[p + 1] + 19 * m[p + 2]) >> 8;
+    return g;
+  }
+  // th: the triggers' threshold (set once triggers are known)
+  let th = 0.45;
+  const passesGate = async (g, t, triggerId) => {
+    const around = picturesAround(g, gw, gh, t);
+    if (around === null) return true;
+    if (!around.length) return false;
+    const res = await det.scoreRects(screen, around);
+    return res.some((d) => (d.probs[triggerId] ?? 0) >= th * 0.3 || d.triggerId === triggerId);
+  };
+  /**
+   * The overlay's decision for one flagged tile (content-loop.js): written words painted over (OCR boxes),
+   * scored again, then the hit must be in a picture on a page. Paints over text on the screen canvas, as the app
+   * does on its snapshot. MASK=0 in the query turns the text cleaning off (for comparison).
+   */
+  const useMask = q.get('mask') !== '0';
+  let maskOff = 0;
+  async function appKeeps(t, triggerId) {
+    if (useMask) {
+      const n = await maskText(ctx, W, H, t, window.shield.findTextBoxes);
+      if (n < 0) maskOff++;
+      if (n > 0) {
+        const [again] = await det.scoreRects(screen, [t]);
+        if ((again.probs[triggerId] ?? 0) < th * 0.85) return false;
+      }
+    }
+    return passesGate(gray(), t, triggerId);
+  }
+  let det;
+  let gateLost = 0, gateDropped = 0;
+  const overlaps = (t, r) => Math.min(t.x + t.w, r.x + r.w) - Math.max(t.x, r.x) > 0.02 && Math.min(t.y + t.h, r.y + r.h) - Math.max(t.y, r.y) > 0.02;
+
+  try {
+    const manifest = await (await fetch('../../assets/images/eval/manifest.json')).json();
+    det = await createContentDetector({ modelsUrl: new URL('../../models/', location.href).href });
+    const info = await det.init();
+    const triggers = triggersFor({ nudity: true, gore: true, violence: true, phobias: ['spiders', 'needles', 'snakes', 'clowns'], sensitivity: sens });
+    await det.setTriggers(triggers);
+    th = triggers[0].threshold;
+    log(`ready on ${info.device} in ${Math.round(info.loadMs)} ms; ${triggers.length} triggers, threshold ${triggers[0].threshold.toFixed(2)}`);
+    const rows = [];
+    let times = [], nudeTimes = [];
+    for (const [cls, expect] of Object.entries(manifest.expect)) {
+      let found = 0, wrong = 0, n = 0, falseTiles = 0, nude = 0;
+      const wrongLabels = new Set();
+      for (let i = 0; i < 6; i++) {
+        let img;
+        try {
+          img = await bitmap(`../../assets/images/eval/${cls}/${i}.jpg`);
+        } catch {
+          continue;
+        }
+        for (const size of ['web', 'large']) {
+          page();
+          const maxW = size === 'web' ? 440 : 760, maxH = size === 'web' ? 330 : 560;
+          const s = Math.min(maxW / img.width, maxH / img.height);
+          const w = img.width * s, h = img.height * s;
+          const x = 40 + rnd() * (W - w - 80), y = 70 + rnd() * (H - h - 90);
+          ctx.drawImage(img, x, y, w, h);
+          const r = { x: x / W, y: y / H, w: w / W, h: h / H };
+          const t0 = performance.now();
+          const res = await det.scoreRects(screen, tiles);
+          times.push(performance.now() - t0);
+          const t1 = performance.now();
+          const boxes = await det.detectNudity(screen, { minScore: 0.45 - 0.2 * sens });
+          nudeTimes.push(performance.now() - t1);
+          n++;
+          nude += boxes.length > 0;
+          const raw = res.map((d, k) => ({ d, t: tiles[k] })).filter((x) => x.d.triggerId);
+          const hits = [];
+          for (const x of raw) if (await appKeeps(x.t, x.d.triggerId)) hits.push(x);
+          gateDropped += raw.length - hits.length;
+          const ok = (list) => list.some((x) => x.d.triggerId === expect && overlaps(x.t, r));
+          if (expect && ok(raw) && !ok(hits)) gateLost++;
+          if (expect && ok(hits)) found++;
+          for (const x of hits) if (x.d.triggerId !== expect) (wrong++, wrongLabels.add(x.d.label));
+          falseTiles += hits.filter((x) => x.d.triggerId !== expect).length;
+        }
+      }
+      rows.push({ cls, expect, n, found, falseTiles, nude, wrongLabels: [...wrongLabels] });
+      log(`${cls.padEnd(9)} ${expect ? `found ${found}/${n}`.padEnd(12) : 'harmless    '} wrong-tiles ${falseTiles}${wrongLabels.size ? ` (${[...wrongLabels].join(', ')})` : ''}  nudity-boxes on ${nude}/${n}`);
+    }
+    // text that NAMES a trigger, no picture (search results, an article, a dark code editor, a chat): CLIP reads
+    // words, so these must not blur. Each flagged tile goes through the app's decision (appKeeps).
+    const TEXT_WORDS = { spiders: ['spider', 'spiders', 'tarantula'], needles: ['syringe', 'needle'], snakes: ['snake', 'python'], clowns: ['clown'], weapons: ['gun', 'guns', 'rifle', 'knife'], gore: ['blood', 'gore'], nudity: ['nude', 'naked'] };
+    let textFalse = 0, textScreens = 0, textRaw = 0;
+    const textLabels = new Set();
+    for (const [topic, ws] of Object.entries(TEXT_WORDS)) {
+      for (const style of ['search', 'article', 'dark', 'chat']) {
+        page();
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 60, W, H - 60);
+        if (style === 'dark' || style === 'chat') {
+          // no plain page around the words: a dark code editor with a sidebar, a chat with coloured bubbles
+          const dark = style === 'dark';
+          ctx.fillStyle = dark ? '#1e1e1e' : '#dfe7ec';
+          ctx.fillRect(0, 0, W, H);
+          ctx.fillStyle = dark ? '#252526' : '#2f3b44';
+          ctx.fillRect(0, 0, 260, H);
+          ctx.font = '15px -apple-system, sans-serif';
+          for (let y = 40, k = 0; y < H; y += 28, k++) {
+            ctx.fillStyle = dark ? '#ccc' : '#e5e5e5';
+            ctx.fillText(dark ? `${ws[k % ws.length]}_${k}.js` : `${topic} club ${k}`, 24, y);
+          }
+          for (let y = 50, k = 0; y < H - 20; y += dark ? 26 : 70, k++) {
+            const w = ws[k % ws.length];
+            if (dark) {
+              ctx.font = '16px Menlo, monospace';
+              ctx.fillStyle = ['#569cd6', '#ce9178', '#4ec9b0', '#dcdcaa'][k % 4];
+              ctx.fillText(`${'  '.repeat(k % 3)}const ${w}List = load${w[0].toUpperCase()}${w.slice(1)}s("${topic}"); // ${w} ${topic}`, 290, y);
+            } else {
+              const mine = k % 2 === 1, text = `did you see the ${w}?? so many ${topic} today lol`;
+              ctx.font = '17px -apple-system, sans-serif';
+              const tw = ctx.measureText(text).width + 32, bx = mine ? W - tw - 40 : 300;
+              ctx.fillStyle = mine ? '#0b84ff' : '#ffffff';
+              ctx.beginPath();
+              ctx.roundRect(bx, y - 26, tw, 40, 18);
+              ctx.fill();
+              ctx.fillStyle = mine ? '#fff' : '#111';
+              ctx.fillText(text, bx + 16, y);
+            }
+          }
+          const res = await det.scoreRects(screen, tiles);
+          textScreens++;
+          const hits = [];
+          for (const [k, d] of res.entries()) if (d.triggerId && (await appKeeps(tiles[k], d.triggerId))) hits.push(d);
+          textRaw += res.filter((d) => d.triggerId).length;
+          textFalse += hits.length;
+          if (hits.length) log(`  text page ${style}/${topic}: ${hits.length} tile(s) kept (${hits.map((d) => d.label).join(', ')})`);
+          hits.forEach((d) => textLabels.add(d.label));
+          continue;
+        }
+        ctx.fillStyle = '#111';
+        ctx.font = `700 ${style === 'article' ? 64 : 30}px -apple-system, sans-serif`;
+        ctx.fillText(style === 'article' ? `${ws[0][0].toUpperCase()}${ws[0].slice(1)}s: 10 facts` : `${ws[0]} - Search`, 60, 140);
+        ctx.font = '18px -apple-system, sans-serif';
+        for (let y = 200, k = 0; y < H - 30; y += style === 'search' ? 64 : 30, k++) {
+          const w = ws[k % ws.length];
+          ctx.fillStyle = style === 'search' && k % 2 === 0 ? '#1a0dab' : '#333';
+          if (style === 'search' && k % 4 === 1) { ctx.fillStyle = '#e8e8e8'; ctx.fillRect(60, y - 40, 72, 48); ctx.fillStyle = '#333'; } // small grey thumbnails, like search results
+          ctx.fillText(style === 'search' ? `${w[0].toUpperCase()}${w.slice(1)} - Wikipedia: everything about the ${w} and ${topic}` : `The ${w} is often misunderstood. Many people fear ${topic}, but the ${w} is part of our world.`, 60, y);
+        }
+        const res = await det.scoreRects(screen, tiles);
+        textScreens++;
+        const hits = [];
+        for (const [k, d] of res.entries()) if (d.triggerId && (await appKeeps(tiles[k], d.triggerId))) hits.push(d);
+        if (hits.length) log(`  text page ${style}/${topic}: ${hits.length} tile(s) kept (${hits.map((d) => d.label).join(', ')})`);
+        textRaw += res.filter((d) => d.triggerId).length;
+        textFalse += hits.length;
+        hits.forEach((d) => textLabels.add(d.label));
+      }
+    }
+    if (maskOff) log(`WARNING text detection unavailable (${maskOff}x): run npm run content:setup`);
+    log(`picture gate: dropped ${gateDropped} tiles on picture screens, lost ${gateLost} found screens`);
+    log(`TEXT pages naming triggers: ${textRaw} flagged by the model, ${textFalse} kept by the app (text cleaning ${useMask ? 'on' : 'off'}), over ${textScreens} screens${textLabels.size ? ` (${[...textLabels].join(', ')})` : ''}`);
+    const pos = rows.filter((r) => r.expect), neg = rows.filter((r) => !r.expect);
+    const sum = (a, k) => a.reduce((s, r) => s + r[k], 0);
+    log(`TOTAL found ${sum(pos, 'found')}/${sum(pos, 'n')} screens with a trigger; harmless screens with any blur: ${neg.reduce((s, r) => s + (r.falseTiles > 0 ? 1 : 0), 0)} classes, ${sum(neg, 'falseTiles')} tiles over ${sum(neg, 'n')} screens; nudity false alarms ${sum(rows, 'nude')}/${sum(rows, 'n')}`);
+    times.sort((a, b) => a - b);
+    nudeTimes.sort((a, b) => a - b);
+    log(`18 tiles: median ${times[times.length >> 1].toFixed(0)} ms, p95 ${times[Math.floor(times.length * 0.95)].toFixed(0)} ms; nudity detector median ${nudeTimes[nudeTimes.length >> 1].toFixed(0)} ms`);
+  } catch (err) {
+    log('FAILED', err?.stack ?? err);
+  }
+  log('DONE');
+</script>

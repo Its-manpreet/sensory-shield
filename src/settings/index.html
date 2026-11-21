@@ -17,7 +17,7 @@
         </svg>
         <div>
           <h1>Sensory Shield</h1>
-          <p class="tagline">Softens flashing and loud sound. Everything stays on this device.</p>
+          <p class="tagline">Softens flashing and loud sound, blurs what you choose. Everything stays on this device.</p>
         </div>
       </div>
     </header>
@@ -48,6 +48,71 @@
         <h2 id="triggers-title">Soften these</h2>
         <p class="hint">Mix and match: each switch works on its own.</p>
         <div id="triggers"></div>
+      </section>
+
+      <section class="card" aria-labelledby="safety-title">
+        <div class="section-head">
+          <h2 id="safety-title">Child safety</h2>
+          <button id="safety-enabled" class="switch" role="switch" aria-checked="false" aria-label="Child safety"><span></span></button>
+        </div>
+        <p class="hint">On-device models look at pictures and read text when the screen changes, and blur what matches. Nothing is saved or sent.</p>
+        <div id="safety-body">
+          <div id="safety-cats"></div>
+          <h3 class="group-head">Fears and phobias</h3>
+          <div class="suggest" id="phobias" role="group" aria-label="Phobias"></div>
+          <div class="field">
+            <label for="custom-input">Also blur pictures of</label>
+            <form id="custom-form" class="trigger-form">
+              <input id="custom-input" type="text" placeholder="Type anything, e.g. horror masks" autocomplete="off" maxlength="60" />
+              <button class="btn primary" type="submit">Add</button>
+            </form>
+            <ul id="custom-chips" class="chips" aria-label="Your own words"></ul>
+          </div>
+          <div class="field">
+            <label for="sensitivity">Sensitivity <output id="sens-out" for="sensitivity"></output></label>
+            <input id="sensitivity" type="range" min="0" max="100" step="5" />
+            <p class="hint">Higher blurs more readily, including some harmless things.</p>
+          </div>
+          <p id="safety-status" class="hint" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="guardian-title">
+        <div class="section-head">
+          <h2 id="guardian-title">Guardian (camera)</h2>
+          <button id="guardian-enabled" class="switch" role="switch" aria-checked="false" aria-label="Guardian"><span></span></button>
+        </div>
+        <p class="hint">If the camera sees strong, rhythmic movement for a while, Guardian asks "Are you OK?". If nobody answers, it sends a short text alert to the people you choose. Video stays on this device; only the alert text is sent.</p>
+        <p class="hint caution">Not a medical device. It can miss seizures (for example absence or focal seizures, or when you are out of view) and can raise false alarms.</p>
+        <div id="guardian-body">
+          <p id="guardian-status" class="state" role="status" aria-live="polite"></p>
+          <div class="field">
+            <label for="g-name">Your name (used in the alert)</label>
+            <input id="g-name" type="text" placeholder="e.g. Sam" maxlength="40" autocomplete="off" />
+          </div>
+          <div class="field">
+            <span class="label">Trusted contacts</span>
+            <ul id="g-contacts" class="contacts"></ul>
+            <form id="g-add" class="trigger-form">
+              <input id="g-contact-name" type="text" placeholder="Their name, e.g. Mum" maxlength="40" autocomplete="off" />
+              <button class="btn primary" type="submit">Add</button>
+            </form>
+            <p class="hint">Each contact installs the free <strong>ntfy</strong> app on their phone and subscribes to the code shown next to their name. Alerts go through ntfy.sh.</p>
+          </div>
+          <div class="field">
+            <label for="g-duration">Ask after rhythmic movement for <output id="g-duration-out" for="g-duration"></output></label>
+            <input id="g-duration" type="range" min="6" max="20" step="1" />
+          </div>
+          <div class="field">
+            <label for="g-countdown">Time to answer before alerting <output id="g-countdown-out" for="g-countdown"></output></label>
+            <input id="g-countdown" type="range" min="10" max="60" step="5" />
+          </div>
+          <div class="actions field">
+            <button id="g-test" class="btn" type="button">Send test alert</button>
+            <button id="g-preview" class="btn" type="button">Preview the check</button>
+          </div>
+          <p id="g-test-out" class="hint" aria-live="polite"></p>
+        </div>
       </section>
 
       <section class="card" aria-labelledby="look-title">

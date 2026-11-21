@@ -22,7 +22,8 @@ export async function startCapture(video) {
 }
 
 /**
- * Loudness of the captured system audio, pushed every ~10 ms by an audio worklet: onLevel(cb(levelDb, tMs)).
+ * Loudness and sharp-tone readings of the captured system audio, pushed every ~10 ms by an audio worklet:
+ * onLevel(cb({ levelDb, toneDb, toneShareDb, toneSharpDb, toneHz }, tMs)). See level-worklet.js.
  * Analysed only: the audio goes into a silent gain node, never to the speakers. Memory only.
  * @param {MediaStream} stream
  */
@@ -67,5 +68,18 @@ export function createSampler(video, { gridW = 64, gridH = 36 } = {}) {
       ctx.drawImage(mid, 0, 0, gridW, gridH);
       return ctx.getImageData(0, 0, gridW, gridH).data;
     },
+    /**
+     * Grayscale of the latest sampled frame at 4x the grid (256x144), for blur panes that follow their
+     * content (box-motion.js). Read only while content blurs are showing. Memory only.
+     * @returns {Uint8Array}
+     */
+    gray() {
+      const m = mid.getContext('2d').getImageData(0, 0, mid.width, mid.height).data;
+      const g = new Uint8Array(mid.width * mid.height);
+      for (let i = 0, p = 0; i < g.length; i++, p += 4) g[i] = (54 * m[p] + 183 * m[p + 1] + 19 * m[p + 2]) >> 8;
+      return g;
+    },
+    grayWidth: gridW * 4,
+    grayHeight: gridH * 4,
   };
 }

@@ -1,0 +1,78 @@
+<!doctype html>
+<!-- OWNER: Agent C. Speed test for the content models on WebGPU (and WASM): npm run content:bench
+     Synthetic inputs only (noise images, harmless sentences). Prints median / p95 per model. -->
+<meta charset="utf-8" />
+<title>Content model speed test</title>
+<script type="importmap">
+  {
+    "imports": {
+      "@huggingface/transformers": "../../node_modules/@huggingface/transformers/dist/transformers.web.js",
+      "onnxruntime-web/webgpu": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs",
+      "onnxruntime-common": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs"
+    }
+  }
+</script>
+<script type="module">
+  import { env, AutoTokenizer, CLIPVisionModelWithProjection, AutoModelForSequenceClassification, Tensor } from '@huggingface/transformers';
+  import * as ort from 'onnxruntime-web/webgpu';
+
+  const log = (...a) => console.log('[bench]', ...a);
+  env.allowRemoteModels = false;
+  env.allowLocalModels = true;
+  env.localModelPath = new URL('../../models/', location.href).href;
+  ort.env.wasm.wasmPaths = new URL('../../node_modules/onnxruntime-web/dist/', location.href).href;
+
+  async function time(name, fn, runs = 20) {
+    await fn();
+    await fn(); // warm-up
+    const t = [];
+    for (let i = 0; i < runs; i++) {
+      const t0 = performance.now();
+      await fn();
+      t.push(performance.now() - t0);
+    }
+    t.sort((a, b) => a - b);
+    log(`${name.padEnd(44)} median ${t[t.length >> 1].toFixed(1)} ms  p95 ${t[Math.floor(t.length * 0.95)].toFixed(1)} ms`);
+  }
+  const noise = (n) => Float32Array.from({ length: n }, () => Math.random());
+
+  try {
+    log('adapter', !!(await navigator.gpu?.requestAdapter()));
+
+    // MobileCLIP-S0 vision, 256x256 tiles
+    let t0 = performance.now();
+    const clip = await CLIPVisionModelWithProjection.from_pretrained('Xenova/mobileclip_s0', { device: 'webgpu', dtype: 'fp16' });
+    log(`mobileclip load ${(performance.now() - t0).toFixed(0)} ms`);
+    for (const b of [1, 4]) {
+      const px = new Tensor('float32', noise(b * 3 * 256 * 256), [b, 3, 256, 256]);
+      await time(`mobileclip_s0 vision fp16 webgpu batch ${b}`, () => clip({ pixel_values: px }));
+    }
+
+    // NudeNet (YOLOv8) via ORT directly
+    for (const [file, size] of [['320n.onnx', 320], ['640m.onnx', 640]]) {
+      t0 = performance.now();
+      const s = await ort.InferenceSession.create(new URL(`../../models/nudenet/${file}`, location.href).href, { executionProviders: ['webgpu'] });
+      log(`nudenet ${file} load ${(performance.now() - t0).toFixed(0)} ms; in ${s.inputNames} out ${s.outputNames}`);
+      const x = new ort.Tensor('float32', noise(3 * size * size), [1, 3, size, size]);
+      const out = await s.run({ [s.inputNames[0]]: x });
+      log(`  output dims ${out[s.outputNames[0]].dims}`);
+      await time(`nudenet ${file} webgpu`, () => s.run({ [s.inputNames[0]]: x }));
+      if (size === 320) try { const x2 = new ort.Tensor('float32', noise(3 * 640 * 640), [1, 3, 640, 640]); const o2 = await s.run({ images: x2 }); log(`  320n at 640 dims ${o2.output0.dims}`); await time('nudenet 320n at 640', () => s.run({ images: x2 })); } catch (e) { log(`  320n at 640: ${e.message}`); }
+    }
+
+    // NSFW text classifier
+    t0 = performance.now();
+    const tok = await AutoTokenizer.from_pretrained('jdp8/distilbert-nsfw-text-classifier');
+    const txt = await AutoModelForSequenceClassification.from_pretrained('jdp8/distilbert-nsfw-text-classifier', { device: 'webgpu', dtype: 'fp16' });
+    log(`text model load ${(performance.now() - t0).toFixed(0)} ms`);
+    const sentences = Array.from({ length: 16 }, (_, i) => `Paragraph ${i}: the committee met on Tuesday to discuss the budget for the new library wing and agreed to postpone the vote until next month.`);
+    const inputs = tok(sentences, { padding: true, truncation: true, max_length: 128 });
+    await time('distilbert nsfw text fp16 webgpu batch 16', () => txt(inputs));
+    const one = tok([sentences[0]], { padding: true, truncation: true });
+    await time('distilbert nsfw text fp16 webgpu batch 1', () => txt(one));
+    log('DONE');
+  } catch (err) {
+    log('FAILED', err?.stack ?? err);
+    log('DONE');
+  }
+</script>

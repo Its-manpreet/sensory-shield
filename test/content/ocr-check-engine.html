@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- OWNER: Agent C. Engine side of test/content/ocr-check.js: OCR lines -> explicit-text areas. -->
+<meta charset="utf-8" />
+<script type="importmap">
+  {
+    "imports": {
+      "@huggingface/transformers": "../../node_modules/@huggingface/transformers/dist/transformers.web.js",
+      "onnxruntime-web/webgpu": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs",
+      "onnxruntime-common": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs"
+    }
+  }
+</script>
+<script type="module">
+  import { createTextSafety } from '../../src/engine/text-safety.js';
+  import { groupParagraphs, textUnits } from '../../src/engine/text-layout.js';
+  const ts = await createTextSafety({ modelsUrl: new URL('../../models/', location.href).href });
+  const lines = await window.check.lines();
+  await ts.findExplicit(lines); // warm-up
+  const t0 = performance.now();
+  const areas = await ts.findExplicit(lines);
+  console.log(`[ocr] text check: ${lines.length} lines -> ${areas.length} area(s) in ${(performance.now() - t0).toFixed(0)} ms`);
+  if (new URLSearchParams(location.search).has('why')) {
+    const ws = textUnits(groupParagraphs(lines));
+    const sc = await ts.scoreTexts(ws.map((w) => w.text));
+    ws.forEach((w, i) => console.log(`[ocr]    p${w.para} ${w.kind[0]} ${sc[i].toFixed(2)} ${w.text}`));
+  }
+  window.check.areas(areas);
+</script>

@@ -1,0 +1,130 @@
+<!doctype html>
+<!-- Sound protection check in real Chromium: renders sounds offline through the REAL audio worklet
+     (src/overlay/level-worklet.js), feeds its readings to the guard (src/engine/loudness.js), checks outcomes.
+       electron test/content/run-page.js test/loudness-check.html
+       electron test/content/run-page.js test/loudness-check.html data=/abs/path/to/audio-data.js   (+ real recordings)
+     Nothing is played aloud. -->
+<meta charset="utf-8" />
+<script type="module">
+  import { createLoudnessGuard } from '../src/engine/loudness.js';
+  const SR = 48000;
+  const MS_PER_READING = (512 / SR) * 1000; // the worklet posts after 4 render quanta (>= 10 ms)
+  let fails = 0;
+  const say = (...a) => console.log(a.join(' '));
+
+  async function readings(samples) {
+    const ac = new OfflineAudioContext(2, samples.length, SR);
+    await ac.audioWorklet.addModule(new URL('../src/overlay/level-worklet.js', import.meta.url));
+    const node = new AudioWorkletNode(ac, 'level-meter');
+    const out = [];
+    node.port.onmessage = (e) => out.push(e.data);
+    const buf = ac.createBuffer(2, samples.length, SR);
+    buf.copyToChannel(samples, 0);
+    buf.copyToChannel(samples, 1);
+    const src = ac.createBufferSource();
+    src.buffer = buf;
+    src.connect(node).connect(ac.destination);
+    src.start();
+    await ac.startRendering();
+    await new Promise((r) => setTimeout(r, 300)); // the last messages arrive after rendering
+    return out;
+  }
+
+  /** run a sound through worklet + guard (all protections on, as the defaults) */
+  async function run(name, samples) {
+    const rs = await readings(samples);
+    const g = createLoudnessGuard();
+    const res = rs.map((r, i) => ({ t: i * MS_PER_READING, r, ...g.push({ ...r, tMs: i * MS_PER_READING }) }));
+    // the sharp-tone part on its own (in the full mix leveling can hide it), and only while it is triggered,
+    // not while it releases: readings where the cut deepens or holds at its triggered depth
+    const h = createLoudnessGuard({ limiter: false, leveling: false, softStart: false });
+    const hs = rs.map((r, i) => ({ t: i * MS_PER_READING, ...h.push({ ...r, tMs: i * MS_PER_READING }) }));
+    const harsh = hs.filter((o, i) => o.gainDb < 0 && o.gainDb <= (hs[i - 1]?.gainDb ?? 0));
+    res.harshOnly = hs;
+    const loud = rs.filter((r) => r.levelDb > -60).map((r) => r.levelDb);
+    const lufs = 10 * Math.log10(loud.reduce((s, l) => s + 10 ** (l / 10), 0) / Math.max(1, loud.length));
+    const maxShare = Math.max(...rs.map((r) => r.toneShareDb));
+    say(`${name.padEnd(26)} loudness ${lufs.toFixed(1).padStart(6)}  max tone share ${maxShare.toFixed(1).padStart(6)} dB  harsh dips ${String(harsh.length).padStart(4)} readings  deepest cut ${Math.min(0, ...res.map((o) => o.gainDb)).toFixed(1)} dB`);
+    return { res, harsh, lufs };
+  }
+  function check(ok, what) {
+    if (!ok) fails++;
+    say(`  ${ok ? 'PASS' : 'FAIL'} ${what}`);
+  }
+
+  // --- synthetic sounds ---
+  const gen = (sec, f) => Float32Array.from({ length: Math.round(sec * SR) }, (_, i) => f(i / SR));
+  let seed = 7;
+  const noise = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+  let hp = 0, prev = 0;
+  const hiss = () => { const x = noise(); hp = 0.5 * (hp + x - prev); prev = x; return hp; }; // crude high-passed noise
+  const music = (t) => {
+    const chord = [220, 277.2, 329.6].reduce((s, f) => s + 0.12 * Math.sin(2 * Math.PI * f * t) + 0.04 * Math.sin(4 * Math.PI * f * t) + 0.015 * Math.sin(6 * Math.PI * f * t), 0);
+    const kt = t % 0.5, kick = 0.5 * Math.exp(-kt * 25) * Math.sin(2 * Math.PI * 55 * kt);
+    const ht = t % 0.25, hat = 0.25 * Math.exp(-ht * 60) * hiss();
+    return chord + kick + hat;
+  };
+  const sine = (f, a) => (t) => a * Math.sin(2 * Math.PI * f * t);
+  const at = (res, t) => res.find((o) => o.t >= t);
+
+  say('--- synthetic ---');
+  {
+    const { harsh } = await run('music (chords+kick+hats)', gen(6, music));
+    check(harsh.length === 0, 'music with hi-hats: no sharp-tone dip');
+  }
+  {
+    const { harsh } = await run('hiss / sibilance noise', gen(4, () => 0.4 * hiss()));
+    check(harsh.length === 0, 'broad hiss: no sharp-tone dip');
+  }
+  {
+    const { harsh } = await run('whistle 2.8 kHz far under music', gen(6, (t) => music(t) + (t >= 2 && t < 4 ? sine(2800, 0.05)(t) : 0)));
+    check(harsh.length === 0, 'a faint whistle 13 dB under the music is not piercing: no dip');
+  }
+  // [name, Hz, amplitude, ms allowed to catch it]. The whistle starts exactly on a hi-hat hit: the hat's noise
+  // makes the peak look less pure until it decays, so it is caught a little later
+  for (const [name, f, a, maxMs] of [['feedback squeal 3.5 kHz', 3500, 0.3, 90], ['whistle 2.8 kHz on a hi-hat hit', 2800, 0.15, 200], ['mosquito tone 15 kHz', 15000, 0.2, 90]]) {
+    const { res, harsh } = await run(`${name} over music`, gen(6, (t) => music(t) + (t >= 2 && t < 4 ? sine(f, a)(t) : 0)));
+    const first = harsh[0]?.t ?? Infinity;
+    check(first >= 2000 && first - 2000 <= maxMs, `${name}: dip starts ${Math.round(first - 2000)} ms after onset (<= ${maxMs})`);
+    check(harsh.every((o) => o.t >= 2000 && o.t < 4000 + 50), 'no dip triggered outside the tone');
+    check(at(res.harshOnly, 3900).gainDb <= -8, `held while the tone lasts (${at(res.harshOnly, 3900).gainDb.toFixed(1)} dB at 3.9 s)`);
+    check(at(res.harshOnly, 5100).gainDb === 0, 'released within ~1 s after');
+  }
+  {
+    const { harsh } = await run('alarm beeps 3 kHz', gen(4, (t) => (t % 0.5 < 0.25 ? sine(3000, 0.3)(t) : 0)));
+    check(harsh.length > 0 && harsh[0].t < 80, `alarm: dips from the first beep (${harsh[0]?.t.toFixed(0)} ms)`);
+  }
+  {
+    const { harsh } = await run('slide whistle 2.5-5 kHz', gen(3, (t) => 0.2 * Math.sin(2 * Math.PI * (2500 * t + 416 * t * t))));
+    check(harsh.length > 200, 'sliding pitch is followed');
+  }
+  {
+    // loudness normalisation: quiet content, then the same content 22 dB louder
+    const { res } = await run('quiet then loud ad', gen(20, (t) => (t < 6 ? 0.08 : 1.6) * music(t)));
+    const lv = (t0, t1) => { const s = res.filter((o) => o.t >= t0 && o.t < t1 && o.r.levelDb > -60); return 10 * Math.log10(s.reduce((a, o) => a + 10 ** ((o.r.levelDb + o.gainDb) / 10), 0) / s.length); };
+    const quiet = lv(3000, 6000), loudEnd = lv(16000, 20000);
+    say(`  heard: quiet part ${quiet.toFixed(1)}, loud part after settling ${loudEnd.toFixed(1)} (target -18)`);
+    check(Math.abs(loudEnd - -18) < 2, 'loud part brought to the target');
+    check(at(res, 5000).gainDb === 0, 'quiet part left at the user volume');
+  }
+
+  // --- real recordings (macOS `say` speech, macOS alert sounds), if given ---
+  const dataUrl = new URLSearchParams(location.search).get('data');
+  if (dataUrl) {
+    say('--- real recordings ---');
+    const { default: clips } = await import(new URL(dataUrl, 'file://').href);
+    for (const [name, b64] of Object.entries(clips)) {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      const s = new Float32Array(bytes.buffer);
+      const pad = new Float32Array(s.length + SR); // 1 s of tail so releases show
+      pad.set(s);
+      const { harsh, res } = await run(name, pad);
+      if (name.startsWith('speech')) {
+        check(harsh.length === 0, 'real speech with sibilants: no sharp-tone dip');
+        check(res.every((o) => o.reason !== 'limiter'), 'speech start is not taken for a sudden loud sound');
+      }
+    }
+  }
+  say(fails ? `${fails} FAILED` : 'ALL PASSED');
+  say('DONE');
+</script>

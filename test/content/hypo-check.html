@@ -1,0 +1,66 @@
+<!doctype html>
+<!-- OWNER: Agent C. Which NLI hypotheses (and how to combine them) separate explicit from harmless text best?
+       npx electron test/content/run-page.js test/content/hypo-check.html -->
+<meta charset="utf-8" />
+<script type="importmap">
+  { "imports": {
+      "@huggingface/transformers": "../../node_modules/@huggingface/transformers/dist/transformers.web.js",
+      "onnxruntime-web/webgpu": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs",
+      "onnxruntime-common": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs" } }
+</script>
+<script type="module">
+  import { AutoTokenizer, AutoModelForSequenceClassification } from '@huggingface/transformers';
+  import { setupRuntime } from '../../src/engine/runtime.js';
+  import { TEXT_CASES, HELDOUT_CASES, SCREEN_CASES } from './text-cases.js';
+  const log = (...a) => console.log('[hypo]', ...a);
+  const H = [
+    'This text describes sexual activity or nudity in an erotic way.',
+    'This text is sexually explicit.',
+    'This text is erotic.',
+    'This text is pornographic.',
+    'This text describes or offers sex.',
+  ];
+  try {
+    const rt = await setupRuntime(new URL('../../models/', location.href).href);
+    const id = 'Xenova/DeBERTa-v3-base-mnli-fever-anli';
+    const tok = await AutoTokenizer.from_pretrained(id);
+    const model = await AutoModelForSequenceClassification.from_pretrained(id, { device: rt.device, dtype: rt.dtype });
+    const ent = 0;
+    const all = [...TEXT_CASES, ...HELDOUT_CASES, ...SCREEN_CASES];
+    const P = []; // P[h][i]
+    for (const h of H) {
+      const row = [];
+      for (let i = 0; i < all.length; i += 16) {
+        const b = all.slice(i, i + 16).map((c) => c.text);
+        const { logits } = await model(tok(b, { text_pair: b.map(() => h), padding: true, truncation: true }));
+        const k = logits.dims[1], d = logits.data;
+        for (let r = 0; r < b.length; r++) {
+          const v = Array.from({ length: k }, (_, c) => Number(d[r * k + c])), m = Math.max(...v);
+          row.push(Math.exp(v[ent] - m) / v.reduce((s, x) => s + Math.exp(x - m), 0));
+        }
+      }
+      P.push(row);
+    }
+    const combos = [];
+    for (let a = 0; a < H.length; a++) {
+      combos.push([`H${a}`, (i) => P[a][i]]);
+      for (let b = a + 1; b < H.length; b++) {
+        combos.push([`mean H${a} H${b}`, (i) => (P[a][i] + P[b][i]) / 2]);
+        combos.push([`min H${a} H${b}`, (i) => Math.min(P[a][i], P[b][i])]);
+      }
+    }
+    combos.push(['mean all', (i) => H.reduce((s, _, h) => s + P[h][i], 0) / H.length]);
+    const sets = [['tune', 0, TEXT_CASES.length], ['held', TEXT_CASES.length, HELDOUT_CASES.length], ['screen', TEXT_CASES.length + HELDOUT_CASES.length, SCREEN_CASES.length]];
+    const rows = [];
+    for (const [name, f] of combos) for (const th of [0.3, 0.4, 0.5, 0.6, 0.7]) {
+      const res = sets.map(([, s, n]) => all.slice(s, s + n).filter((c, j) => (f(s + j) >= th) === c.explicit).length);
+      const fn = all.filter((c, i) => c.explicit && f(i) < th).length;
+      // margin: lowest explicit score minus highest harmless score
+      const margin = Math.min(...all.map((c, i) => (c.explicit ? f(i) : 1))) - Math.max(...all.map((c, i) => (c.explicit ? 0 : f(i))));
+      rows.push({ name, th, res, total: res.reduce((a, b) => a + b, 0), fn, margin });
+    }
+    rows.sort((a, b) => b.total - a.total || a.fn - b.fn || b.margin - a.margin);
+    for (const r of rows.slice(0, 15)) log(`${r.name.padEnd(14)} @${r.th}: tune ${r.res[0]}/${TEXT_CASES.length} held ${r.res[1]}/${HELDOUT_CASES.length} screen ${r.res[2]}/${SCREEN_CASES.length}  missed-explicit ${r.fn}  margin ${r.margin.toFixed(2)}`);
+  } catch (e) { log('FAILED', e?.stack ?? e); }
+  log('DONE');
+</script>

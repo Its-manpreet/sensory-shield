@@ -1,0 +1,64 @@
+<!doctype html>
+<!-- OWNER: Agent C. Compares NLI (natural-language inference) models as a context check for explicit text:
+       npx electron test/content/run-page.js test/content/nli-check.html
+     For each sentence: P(entailment) of "This text is sexually explicit." -->
+<meta charset="utf-8" />
+<title>NLI context check</title>
+<script type="importmap">
+  {
+    "imports": {
+      "@huggingface/transformers": "../../node_modules/@huggingface/transformers/dist/transformers.web.js",
+      "onnxruntime-web/webgpu": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs",
+      "onnxruntime-common": "../../node_modules/onnxruntime-web/dist/ort.webgpu.min.mjs"
+    }
+  }
+</script>
+<script type="module">
+  import { AutoTokenizer, AutoModelForSequenceClassification } from '@huggingface/transformers';
+  import { setupRuntime } from '../../src/engine/runtime.js';
+  import { TEXT_CASES } from './text-cases.js';
+  import { createTextSafety } from '../../src/engine/text-safety.js';
+
+  const log = (...a) => console.log('[nli]', ...a);
+  const HYPOTHESES = ['This text is sexually explicit.', 'This text describes sexual activity or nudity in an erotic way.', 'This is pornographic or erotic content.'];
+  const MODELS = ['Xenova/nli-deberta-v3-xsmall', 'Xenova/nli-deberta-v3-small', 'Xenova/DeBERTa-v3-base-mnli-fever-anli'];
+  try {
+    const rt = await setupRuntime(new URL('../../models/', location.href).href);
+    const stage1 = await (await createTextSafety({ modelsUrl: rt.modelsUrl })).scoreTexts(TEXT_CASES.map((c) => c.text));
+    const dtypes = (new URLSearchParams(location.search).get('dtype') ?? 'fp16').split(',');
+    for (const dtype of dtypes) for (const id of MODELS) {
+      const tok = await AutoTokenizer.from_pretrained(id);
+      const model = await AutoModelForSequenceClassification.from_pretrained(id, { device: dtype === 'q8' ? 'wasm' : rt.device, dtype });
+      const l2i = Object.fromEntries(Object.entries(model.config.id2label).map(([i, l]) => [l.toLowerCase(), Number(i)]));
+      const ent = l2i.entailment, con = l2i.contradiction;
+      const texts = TEXT_CASES.map((c) => c.text);
+      for (const h of HYPOTHESES) {
+        const t0 = performance.now();
+        const inputs = tok(texts, { text_pair: texts.map(() => h), padding: true, truncation: true });
+        const { logits } = await model(inputs);
+        const ms = performance.now() - t0;
+        const k = logits.dims[1], d = logits.data;
+        // entailment vs contradiction only (standard zero-shot multi-label)
+        // 3-way: P(entailment) against neutral AND contradiction
+        const p = texts.map((_, r) => {
+          const row = Array.from({ length: k }, (_, c) => Number(d[r * k + c]));
+          const m = Math.max(...row), z = row.reduce((s, v) => s + Math.exp(v - m), 0);
+          return Math.exp(row[ent] - m) / z;
+        });
+        const combo = (th) => TEXT_CASES.filter((c, i) => (stage1[i] >= 0.8 && p[i] >= th) === c.explicit).length;
+        let best = { acc: 0, th: 0 };
+        for (const th of [0.3, 0.5, 0.7, 0.9]) {
+          const acc = TEXT_CASES.filter((c, i) => (p[i] >= th) === c.explicit).length;
+          if (acc > best.acc) best = { acc, th };
+        }
+        log(`${dtype} ${id.split('/')[1].padEnd(32)} "${h}" ${ms.toFixed(0)} ms; alone best ${best.acc}/${texts.length} at ${best.th}; stage1+nli ${[0.3, 0.5, 0.7].map((t) => `${combo(t)}@${t}`).join(' ')}`);
+        const wrong = TEXT_CASES.map((c, i) => ((stage1[i] >= 0.8 && p[i] >= 0.5) !== c.explicit ? `${p[i].toFixed(2)} ${c.text.slice(0, 60)}` : null)).filter(Boolean);
+        for (const w of wrong) log(`    wrong@0.5: ${w}`);
+      }
+      await model.dispose();
+    }
+  } catch (err) {
+    log('FAILED', err?.stack ?? err);
+  }
+  log('DONE');
+</script>

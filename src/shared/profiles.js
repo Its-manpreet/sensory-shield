@@ -36,7 +36,7 @@ export const DEFAULT_PROFILES = {
  * @returns {import('./types.js').Settings}
  */
 /** bump when default numbers change; older saved settings are migrated in src/main/settings-file.js */
-export const SETTINGS_VERSION = 8;
+export const SETTINGS_VERSION = 10;
 
 export function defaultSettings() {
   return {
@@ -52,8 +52,32 @@ export function defaultSettings() {
       colorFlicker: true, // red <-> blue colour flicker (red flashes follow profile.flash.detectRed)
       // sound of what is playing (system volume is turned down, never up)
       loudLimiter: true, // sudden loud sounds: jump scares, shouting, alarms
-      loudLeveling: false, // keep loudness even between content (quiet video, then a loud ad): opt-in
+      loudLeveling: true, // normalise loudness between content (quiet video, then a loud ad); on since v10
+      harshTones: true, // sharp high pitches: whistles, feedback squeals, alarm beeps (whole volume dips)
       softStart: true, // sound that starts by itself after silence (autoplay) is eased in
+    },
+    // Child safety / content protection: on-device picture and text models blur what matches.
+    // Not part of Profile (frozen contract). Categories: src/engine/categories.js.
+    safety: {
+      enabled: true,
+      nudity: true, // nudity and sexual images (NudeNet + MobileCLIP)
+      sexualText: true, // sexual / explicit writing, judged in context (OCR + two text models)
+      gore: true, // graphic injury, blood, dead bodies
+      violence: true, // guns, knives, fighting
+      phobias: [], // ids from PHOBIAS in src/engine/categories.js, e.g. 'spiders', 'needles'
+      custom: [], // any words, e.g. 'clowns', 'horror masks'
+      sensitivity: 0.5, // 0..1, higher blurs more readily
+    },
+    // Guardian: the webcam watches for strong rhythmic movement (a possible convulsive seizure), asks
+    // "Are you OK?", and with no answer sends a TEXT alert to trusted contacts (ntfy push). Off by default:
+    // it is the app's only network use and it needs the camera. Frames stay in memory. src/main/guardian.js.
+    guardian: {
+      enabled: false,
+      userName: '', // used in the alert text, e.g. "Sam did not answer"
+      contacts: [], // [{ name, topic }] ntfy topics the contacts subscribe to
+      server: 'https://ntfy.sh',
+      minDurationSec: 10, // rhythmic this long before the check
+      countdownSec: 30, // time to answer the check before alerting
     },
   };
 }
@@ -69,7 +93,7 @@ const pick = (fresh, saved = {}) => Object.fromEntries(Object.keys(fresh).map((k
 export function migrateSettings(saved) {
   const fresh = defaultSettings();
   if (!saved || typeof saved !== 'object') return fresh;
-  if (saved.version === SETTINGS_VERSION) return { ...fresh, ...saved, sensory: pick(fresh.sensory, saved.sensory) };
+  if (saved.version === SETTINGS_VERSION) return { ...fresh, ...saved, sensory: pick(fresh.sensory, saved.sensory), safety: pick(fresh.safety, saved.safety), guardian: pick(fresh.guardian, saved.guardian) };
   const profiles = structuredClone(fresh.profiles);
   for (const [id, p] of Object.entries(saved.profiles ?? {})) {
     if (!profiles[id]) profiles[id] = p;
@@ -81,7 +105,10 @@ export function migrateSettings(saved) {
     // the profile picker is hidden while the app is flash-only: everyone uses Photosensitive
     activeProfileId: fresh.activeProfileId,
     appearance: { ...fresh.appearance, ...saved.appearance },
-    sensory: pick(fresh.sensory, saved.sensory),
+    // v10: loudness normalisation is on by default (before, off was the default, not a choice)
+    sensory: { ...pick(fresh.sensory, saved.sensory), ...((saved.version ?? 0) < 10 ? { loudLeveling: true } : {}) },
+    safety: pick(fresh.safety, saved.safety), // v9: new, on by default
+    guardian: pick(fresh.guardian, saved.guardian),
     profiles,
   };
 }

@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- OWNER: Agent C. A fake "screen" for the explicit-text pipeline check (test/content/ocr-check.js).
+     Elements with data-explicit="1" should be blurred, everything else must stay readable. -->
+<meta charset="utf-8" />
+<title>Text screen</title>
+<style>
+  body { margin: 0; font: 15px/1.45 -apple-system, "Helvetica Neue", sans-serif; color: #222; background: #fff; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 28px; padding: 28px 36px; }
+  h2 { font-size: 19px; margin: 0 0 8px; }
+  section { border: 1px solid #ddd; border-radius: 10px; padding: 14px 18px; }
+  .form label { display: block; margin: 6px 0; }
+  small { color: #666; font-size: 12px; }
+</style>
+<section class="form">
+  <h2>Patient registration</h2>
+  <label>Full name: ________________</label>
+  <label>Date of birth: __ / __ / ____</label>
+  <label>Sex: ☐ Male ☐ Female ☐ Prefer not to say</label>
+  <label>Breast screening in the last 3 years? ☐ Yes ☐ No</label>
+</section>
+<section>
+  <h2>Biology revision</h2>
+  <p>Sexual reproduction needs two parents. Each parent gives half of the chromosomes, so the offspring differ from both. Mating season for many frogs begins in early spring.</p>
+</section>
+<section data-explicit="1">
+  <h2>Chapter 7</h2>
+  <p>He pulled her onto the bed and slowly undressed her, kissing his way down her naked body. She moaned his name as his fingers slipped between her thighs, and they had sex until morning.</p>
+</section>
+<section>
+  <h2>Weekly shop</h2>
+  <p>Chicken breast, skinless, 500 g, £3.20. Cucumbers, 2 for £1. Strip the old paint off the door before sanding it.</p>
+</section>
+<section data-explicit="1">
+  <p><b>Hot singles near you</b> want to hook up tonight. Click for nude pics, live cam girls strip for you now. Join free!</p>
+</section>
+<section>
+  <h2>News</h2>
+  <p>Same-sex marriage was legalised in 2014. The statue of David, a nude sculpture by Michelangelo, was completed in 1504. <small>Sex education is part of the curriculum.</small></p>
+</section>
