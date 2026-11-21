@@ -1,7 +1,7 @@
 // OWNER: Agent A. Pure functions: detector outputs + settings -> Region[] for the effects renderer.
 // Kept DOM-free so they can be unit tested in Node (test/overlay-contract.test.js).
 // `style` is an additive field (not in the frozen contract) that picks the look within an effect:
-//   desaturate (red / colour flicker), veil (brightness ease), framecap (constant motion).
+//   desaturate (red / colour flicker).
 
 /**
  * Each switch is independent: plain flashing (profile.flash.enabled) covers 'luminance' events; red flashes
@@ -23,22 +23,3 @@ export function toRegions(flashEvents, profile, sensory = {}) {
   }));
 }
 
-const key = (r) => `${r.x.toFixed(2)}-${r.y.toFixed(2)}-${r.w.toFixed(2)}-${r.h.toFixed(2)}`;
-
-/**
- * @param {{ brightness?: {rect: any, strength: number}[], motion?: {rect: any, kind: string}[] }} found
- * @returns {import('../shared/types.js').Region[]}
- */
-export function sensoryRegions({ brightness = [], motion = [] }) {
-  return [
-    ...brightness.map((b) => ({ id: `bright-${key(b.rect)}`, rect: b.rect, effect: 'dim', style: 'veil', reason: '', strength: b.strength })),
-    ...motion.map((m) => ({
-      id: `motion-${m.kind}-${key(m.rect)}`,
-      rect: m.rect,
-      effect: 'freeze',
-      style: 'framecap',
-      reason: 'Motion calmed',
-      strength: 1,
-    })),
-  ];
-}

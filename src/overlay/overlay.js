@@ -1,15 +1,13 @@
 // OWNER: Agent A. Overlay renderer: capture -> sensory detectors -> regions -> effects. Frames live in memory only.
-//   every frame: flashes + red/colour flicker and brightness jumps (64x36), constant motion (96x54)
+//   every frame: flashes + red flashes + red/blue colour flicker (64x36)
 //   every 50 ms: loudness of the sound playing (system audio) -> system volume turned down when needed
 // (Content detection is removed for now; see git tag vision-v1.)
 import { createFlashDetector } from '../engine/flash.js';
-import { createBrightnessGuard } from '../engine/brightness.js';
-import { createMotionDetector } from '../engine/motion.js';
 import { createLoudnessGuard } from '../engine/loudness.js';
 import { activeProfile } from '../shared/profiles.js';
 import { getSettings, onChange } from '../shared/store.js';
 import { createEffects } from './effects.js';
-import { toRegions, sensoryRegions } from './regions.js';
+import { toRegions } from './regions.js';
 import { startCapture, createSampler, createSoundMeter } from './capture.js';
 
 const video = /** @type {HTMLVideoElement} */ (document.getElementById('capture'));
@@ -25,8 +23,6 @@ const effects = createEffects(canvas, video, { fadeMs: profile.response.fadeMs, 
 effects.setLabelsVisible(profile.response.showLabel);
 const flashConfig = (p, s) => ({ ...p.flash, colorFlicker: s.sensory?.colorFlicker ?? true });
 let flash = createFlashDetector(flashConfig(profile, settings));
-const brightness = createBrightnessGuard();
-const motion = createMotionDetector();
 const sampler = createSampler(video);
 let captureState = 'starting'; // 'starting' | 'ok' | 'denied'
 
@@ -35,8 +31,6 @@ function applySettings(s) {
   settings = s;
   profile = activeProfile(s);
   if (JSON.stringify(flashConfig(profile, s)) !== prevFlash) flash = createFlashDetector(flashConfig(profile, s));
-  if (!s.sensory?.constantMotion) motion.reset();
-  if (!s.sensory?.brightness) brightness.reset();
   effects.setStyle({ fadeMs: profile.response.fadeMs, ...s.appearance });
   effects.setLabelsVisible(profile.response.showLabel);
   if (!s.enabled) effects.clear();
@@ -91,12 +85,8 @@ function onFrame(now) {
   const flashOn = profile.flash.enabled || profile.flash.detectRed || sens.colorFlicker;
   flashEvents = flashOn ? flash.push(frame) : [];
   stats.flashMs += performance.now() - t0;
-  // a single jump is the brightness guard's job; repeated jumps are flashing, already softened by the glass
-  const overlapsFlash = (r) => flashEvents.some((f) => r.x < f.rect.x + f.rect.w && f.rect.x < r.x + r.w && r.y < f.rect.y + f.rect.h && f.rect.y < r.y + r.h);
-  const bright = sens.brightness ? brightness.push(frame).filter((b) => !overlapsFlash(b.rect)) : [];
-  const moving = sens.constantMotion ? motion.push({ data: sampler.sampleMotion(), tMs: now }) : [];
   stats.engineMs += performance.now() - t0;
-  lastRegions = [...toRegions(flashEvents, profile, sens), ...sensoryRegions({ brightness: bright, motion: moving })];
+  lastRegions = toRegions(flashEvents, profile, sens);
   lastFrameAt = now;
   effects.setRegions(lastRegions, now);
 }

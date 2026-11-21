@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFlashDetector } from '../src/engine/flash.js';
 import { DEFAULT_PROFILES, defaultSettings, activeProfile } from '../src/shared/profiles.js';
-import { toRegions, sensoryRegions } from '../src/overlay/regions.js';
+import { toRegions } from '../src/overlay/regions.js';
 
 const isRect = (r) => ['x', 'y', 'w', 'h'].every((k) => typeof r[k] === 'number' && r[k] >= 0 && r[k] <= 1);
 
@@ -51,11 +51,3 @@ test('regions: flash events -> softened regions; each switch independent', () =>
   assert.deepEqual(toRegions(events, { ...profile, flash: { ...profile.flash, enabled: false, detectRed: false } }, { colorFlicker: false }), []);
 });
 
-test('sensory regions: brightness veil, motion frame cap, with stable ids', () => {
-  const rect = { x: 0.25, y: 0, w: 0.25, h: 0.25 };
-  const r = sensoryRegions({ brightness: [{ rect, strength: 0.6 }], motion: [{ rect, kind: 'constant' }] });
-  assert.deepEqual(r.map((x) => [x.effect, x.style]), [['dim', 'veil'], ['freeze', 'framecap']]);
-  assert.equal(r[0].strength, 0.6);
-  assert.equal(sensoryRegions({ motion: [{ rect, kind: 'constant' }] })[0].id, r[1].id);
-  assert.ok(r.every((x) => isRect(x.rect)));
-});

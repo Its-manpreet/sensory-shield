@@ -36,7 +36,7 @@ export const DEFAULT_PROFILES = {
  * @returns {import('./types.js').Settings}
  */
 /** bump when default numbers change; older saved settings are migrated in src/main/settings-file.js */
-export const SETTINGS_VERSION = 7;
+export const SETTINGS_VERSION = 8;
 
 export function defaultSettings() {
   return {
@@ -50,8 +50,6 @@ export function defaultSettings() {
     // One switch per trigger beyond plain flashing. Not part of Profile (frozen contract).
     sensory: {
       colorFlicker: true, // red <-> blue colour flicker (red flashes follow profile.flash.detectRed)
-      brightness: true, // sudden jumps to a bright screen: eased in
-      constantMotion: false, // any region that keeps moving (also slows videos): opt-in
       // sound of what is playing (system volume is turned down, never up)
       loudLimiter: true, // sudden loud sounds: jump scares, shouting, alarms
       loudLeveling: false, // keep loudness even between content (quiet video, then a loud ad): opt-in

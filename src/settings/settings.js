@@ -14,8 +14,6 @@ const TRIGGERS = [
   { id: 'flash', name: 'Flashing', hint: 'Bright flashes three or more times a second.', get: () => profile().flash.enabled, set: (on) => patchProfile('flash', { enabled: on }) },
   { id: 'red', name: 'Red flashes', hint: 'Saturated red flashing, which is more provocative.', get: () => profile().flash.detectRed, set: (on) => patchProfile('flash', { detectRed: on }) },
   { id: 'colorFlicker', name: 'Red / blue colour flicker', hint: 'Colours swapping fast, even without a brightness change.', sensory: true },
-  { id: 'brightness', name: 'Sudden brightness', hint: 'A white page after a dark one, eased in over a second.', sensory: true },
-  { id: 'constantMotion', name: 'All constant motion', hint: 'Anything that keeps moving, including videos.', sensory: true },
   { id: 'loudLimiter', group: 'Sound', name: 'Sudden loud sounds', hint: 'Jump scares, shouting, alarms: the volume dips at once, then comes back.', sensory: true },
   { id: 'loudLeveling', group: 'Sound', name: 'Keep loudness even', hint: 'A loud ad after a quiet video is brought down to a comfortable level.', sensory: true },
   { id: 'softStart', group: 'Sound', name: 'Sound that starts by itself', hint: 'Autoplay after silence fades in instead of blaring.', sensory: true },

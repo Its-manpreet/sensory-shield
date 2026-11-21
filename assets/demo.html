@@ -38,10 +38,6 @@
       :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
       .foot { color: var(--muted); font-size: 14px; margin-top: 24px; }
       [hidden] { display: none !important; }
-      /* constant motion */
-      .drift { background: radial-gradient(circle at 30% 40%, #e07a5f 0 50px, transparent 51px), radial-gradient(circle at 70% 60%, #81b29a 0 60px, transparent 61px), radial-gradient(circle at 50% 20%, #f2cc8f 0 34px, transparent 35px), #3d405b; background-size: 320px 240px; animation: drift 6s linear infinite; }
-      @keyframes drift { to { background-position: 640px 240px, -640px -240px, 320px 480px, 0 0; } }
-      @media (prefers-reduced-motion: reduce) { .drift { animation-duration: 6s; } }
     </style>
   </head>
   <body>
@@ -69,24 +65,9 @@
           <div class="stage" data-stage="rb"><span class="idle">Hidden</span></div>
           <div class="controls"><button data-show="rb" data-clip="clips/FLASH-WARNING-redblue-5hz.webm" disabled>Play</button></div>
         </section>
-
-        <section class="panel" aria-labelledby="h-bright">
-          <h2 id="h-bright">Sudden brightness</h2>
-          <p>The whole page goes dark, then jumps to white. Expected: the white is eased in over about a second.</p>
-          <div class="stage" data-stage="bright"><span class="idle">Uses the whole window</span></div>
-          <div class="controls"><button data-show="bright" disabled>Dark, then white</button></div>
-        </section>
-
-        <section class="panel" aria-labelledby="h-drift">
-          <h2 id="h-drift">Constant motion</h2>
-          <p>Shapes that never stop drifting. Expected: calmed only when "All constant motion" is on in settings.</p>
-          <div class="stage" data-stage="drift"><span class="idle">Hidden</span></div>
-          <div class="controls"><button data-show="drift" disabled>Start</button></div>
-        </section>
       </div>
       <p class="foot">Reduces exposure to known triggers; it is not a medical device. Panels stop by themselves after 15 seconds. Press a button again to stop.</p>
     </main>
-    <div id="full" hidden style="position:fixed;inset:0;z-index:10;background:#000"></div>
 
     <script type="module">
       const $$ = (s) => [...document.querySelectorAll(s)];
@@ -102,7 +83,6 @@
         clearInterval(timers[k + 'i']);
         cancelAnimationFrame(timers[k + 'r']);
         delete timers[k];
-        if (k === 'bright') document.getElementById('full').hidden = true; // the full-window test layer
         const s = stage(k);
         s.replaceChildren(Object.assign(document.createElement('span'), { className: 'idle', textContent: 'Hidden' }));
         for (const b of $$(`[data-show="${k}"]`)) b.setAttribute('aria-pressed', 'false');
@@ -118,15 +98,6 @@
           const v = Object.assign(document.createElement('video'), { src: button.dataset.clip, muted: true, loop: true, playsInline: true });
           s.replaceChildren(v);
           v.play();
-        } else if (k === 'bright') {
-          const full = document.getElementById('full');
-          full.hidden = false;
-          full.style.background = '#000';
-          timers[k + 'i'] = setTimeout(() => (full.style.background = '#fff'), 1500); // cleared by stop() too
-          timers[k] = setTimeout(() => stop(k), 4000);
-          return;
-        } else if (k === 'drift') {
-          s.replaceChildren(Object.assign(document.createElement('div'), { className: 'drift' }));
         }
         timers[k] = setTimeout(() => stop(k), 15000);
       }

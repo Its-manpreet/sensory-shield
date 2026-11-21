@@ -60,16 +60,8 @@ export function createSampler(video, { gridW = 64, gridH = 36 } = {}) {
   mctx.imageSmoothingQuality = 'high';
   ctx.imageSmoothingQuality = 'high';
 
-  const motionCanvas = new OffscreenCanvas(96, 54); // finer grid for the motion detector
-  const mo = /** @type {OffscreenCanvasRenderingContext2D} */ (motionCanvas.getContext('2d', { willReadFrequently: true }));
-  mo.imageSmoothingQuality = 'high';
 
   return {
-    /** RGBA 96x54 of the latest sample (motion detector; call after sample()) */
-    sampleMotion() {
-      mo.drawImage(mid, 0, 0, 96, 54);
-      return mo.getImageData(0, 0, 96, 54).data;
-    },
     /** @returns {Uint8ClampedArray} RGBA gridW*gridH*4 of the latest frame */
     sample() {
       mctx.drawImage(video, 0, 0, mid.width, mid.height);

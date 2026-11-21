@@ -12,8 +12,6 @@
 const HOLD_MS = 100;
 // Protection appears fast (every extra frame of a flash matters) and leaves at the profile's fade time.
 const FADE_IN_MAX_MS = 120;
-const FRAMECAP_MS = 500; // motion regions update twice a second...
-const FRAMECAP_FADE_MS = 350; // ...crossfading into each new snapshot
 const SMOOTH_W = 192;
 const SMOOTH_H = 108;
 
@@ -178,52 +176,6 @@ export function createEffects(canvas, video, opts = {}) {
     return { rect: { x: x0 / canvas.width, y: y0 / canvas.height, w: (x1 - x0) / canvas.width, h: (y1 - y0) / canvas.height }, alpha: a };
   }
 
-  /**
-   * Brightness ease: a plain dark veil whose strength the brightness guard lowers every frame. One path for
-   * all eased regions (they share one strength), so there are no seams.
-   */
-  function drawVeils(entries) {
-    if (!entries.length) return;
-    ctx.beginPath();
-    let a = 0;
-    for (const e of entries) {
-      ctx.rect(...px(e.region.rect).d);
-      a = Math.max(a, Math.min(0.95, e.region.strength) * e.alpha);
-    }
-    ctx.fillStyle = `rgba(10, 10, 12, ${a})`;
-    ctx.fill('nonzero');
-  }
-
-  /**
-   * Frame-rate cap for motion: the region is shown as snapshots taken every FRAMECAP_MS, each crossfading
-   * into the next, so movement becomes a slow, gentle change instead of continuous motion.
-   */
-  function drawFramecap(entry, alpha, nowMs) {
-    const { s, d } = px(entry.region.rect);
-    const snap = () => {
-      const c = document.createElement('canvas');
-      c.width = Math.max(1, Math.round(d[2] / 2));
-      c.height = Math.max(1, Math.round(d[3] / 2));
-      c.getContext('2d').drawImage(video, ...s, 0, 0, c.width, c.height);
-      return c;
-    };
-    const f = entry.frames ?? (entry.frames = { a: snap(), b: null, t: nowMs });
-    if (nowMs - f.t >= FRAMECAP_MS) (f.a = f.b ?? f.a), (f.b = snap()), (f.t = nowMs);
-    const k = f.b ? Math.min(1, (nowMs - f.t) / FRAMECAP_FADE_MS) : 0;
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.beginPath();
-    ctx.roundRect(...d, 10 * devicePixelRatio);
-    ctx.clip();
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(f.a, ...d);
-    if (f.b && k > 0) {
-      ctx.globalAlpha = alpha * k;
-      ctx.drawImage(f.b, ...d);
-    }
-    ctx.restore();
-  }
-
   function drawFreeze(entry, alpha) {
     const { s, d } = px(entry.region.rect);
     if (!entry.frozen) {
@@ -280,26 +232,15 @@ export function createEffects(canvas, video, opts = {}) {
     const stepOut = fadeMs > 0 ? dt / fadeMs : 1;
     const stepIn = Math.max(stepOut, dt / FADE_IN_MAX_MS);
     const revealing = nowMs < revealUntil;
-    const dims = [], glass = [], veils = [], labels = [];
+    const dims = [], glass = [], labels = [];
     for (const [id, e] of live) {
       const wanted = !revealing && nowMs - e.seenAt <= HOLD_MS;
-      // a brightness veil must be there on the very first bright frame (its own strength does the easing)
-      if (e.region.style === 'veil') e.alpha = wanted ? 1 : Math.max(0, e.alpha - stepOut);
-      else e.alpha = Math.max(0, Math.min(1, e.alpha + (wanted ? stepIn : -stepOut)));
+      e.alpha = Math.max(0, Math.min(1, e.alpha + (wanted ? stepIn : -stepOut)));
       if (e.alpha === 0) {
         if (!wanted && nowMs - e.seenAt > HOLD_MS) live.delete(id);
         continue;
       }
-      const { effect, style } = e.region;
-      if (style === 'veil') {
-        veils.push(e);
-        continue;
-      }
-      if (style === 'framecap') {
-        drawFramecap(e, e.alpha, nowMs);
-        if (labelsVisible && e.region.reason) labels.push({ rect: e.region.rect, reason: e.region.reason, alpha: e.alpha });
-        continue;
-      }
+      const { effect } = e.region;
       if (effect === 'blur') {
         const [x, y, w, h] = px(e.region.rect).d;
         const inset = 4 * devicePixelRatio; // neighbouring tiles read as separate frosted panes
@@ -312,7 +253,6 @@ export function createEffects(canvas, video, opts = {}) {
     }
     drawDims(dims);
     const panel = drawFlashGlass(glass);
-    drawVeils(veils); // last: eases the whole jumped area, including anything drawn above
     if (labelsVisible) {
       if (panel) labels.push({ rect: panel.rect, reason: glass[0].region.reason, alpha: panel.alpha });
       else if (dims.length) labels.push({ rect: dims[0].region.rect, reason: dims[0].region.reason, alpha: dims[0].alpha });

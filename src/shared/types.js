@@ -24,7 +24,7 @@ export {};
  */
 
 /** @typedef {{flashStyle: 'glass'|'dim', smoothMs: number}} Appearance */
-/** @typedef {{colorFlicker: boolean, brightness: boolean, constantMotion: boolean, loudLimiter: boolean, loudLeveling: boolean, softStart: boolean}} Sensory */
+/** @typedef {{colorFlicker: boolean, loudLimiter: boolean, loudLeveling: boolean, softStart: boolean}} Sensory */
 /** @typedef {{enabled: boolean, activeProfileId: string, profiles: Record<string, Profile>, appearance: Appearance, sensory: Sensory}} Settings */
 
 /** @typedef {{fps: number, flashMs: number, modelMs: number, modelHz: number}} ShieldStats */
