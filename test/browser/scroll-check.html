@@ -1,0 +1,64 @@
+<!doctype html>
+<!-- OWNER: Agent B. Real-pipeline false-alarm check: a 2940x1912 "screen" canvas with a photo grid is
+     scrolled like a person would (steady, flicks, jiggle) and fed through the app's real sampler
+     (Chromium downscale) and flash detector. Expect zero events. Run: npm run demo, then open
+     http://localhost:8765/test/browser/scroll-check.html (results also go to the console). -->
+<meta charset="utf-8" />
+<title>Scroll false-alarm check</title>
+<pre id="out">running…</pre>
+<script type="module">
+  import { createFlashDetector } from '../../src/engine/flash.js';
+  import { createSampler } from '../../src/overlay/capture.js';
+
+  const W = 2940, H = 1912;
+  const screen = new OffscreenCanvas(W, H);
+  const sctx = screen.getContext('2d');
+  // a tall page of "photos": gradients, blobs and noise, mixed brightness, white gutters
+  const page = new OffscreenCanvas(W, H * 6);
+  const p = page.getContext('2d');
+  p.fillStyle = '#fff';
+  p.fillRect(0, 0, page.width, page.height);
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const tile = 460, gap = 12;
+  for (let y = 0; y < page.height; y += tile + gap) {
+    for (let x = gap; x < W; x += tile + gap) {
+      const kind = rnd();
+      const g = p.createLinearGradient(x, y, x, y + tile);
+      const base = kind < 0.25 ? [10, 15, 30] : kind > 0.8 ? [230, 235, 240] : [80 + 120 * rnd(), 90 + 100 * rnd(), 60 + 150 * rnd()];
+      g.addColorStop(0, `rgb(${base.map((v) => Math.min(255, v + 60)).join(',')})`);
+      g.addColorStop(1, `rgb(${base.map((v) => v * 0.5).join(',')})`);
+      p.fillStyle = g;
+      p.fillRect(x, y, tile, tile);
+      for (let k = 0; k < 6; k++) {
+        p.fillStyle = `rgba(${255 * rnd()},${255 * rnd()},${255 * rnd()},0.6)`;
+        p.beginPath();
+        p.arc(x + tile * rnd(), y + tile * rnd(), 20 + 80 * rnd(), 0, 7);
+        p.fill();
+      }
+    }
+  }
+  const sampler = createSampler(screen, {});
+  const profiles = {
+    'steady 1000 px/s': (t) => 1000 * 2 * t,
+    'steady 3000 px/s': (t) => 3000 * 2 * t,
+    'flick': (t) => 9000 * (1 - Math.exp(-2.5 * t)),
+    'jiggle': (t) => 600 * Math.sin(2 * Math.PI * 1.5 * t) + 600,
+    'fast 6000 px/s': (t) => 6000 * 2 * t,
+  };
+  const lines = [];
+  for (const [name, pos] of Object.entries(profiles)) {
+    const det = createFlashDetector({});
+    let events = 0, frames = 0;
+    for (let f = 0; f < 120; f++) {
+      const t = f / 30;
+      sctx.drawImage(page, 0, -Math.round(pos(t)) % (page.height - H));
+      const ev = det.push({ data: sampler.sample(), tMs: t * 1000 });
+      if (ev.length) events++;
+      frames++;
+    }
+    lines.push(`${events ? 'FAIL' : 'ok  '} ${name}: ${events}/${frames} frames with events`);
+  }
+  document.getElementById('out').textContent = lines.join('\n');
+  console.log('SCROLLCHECK\n' + lines.join('\n'));
+</script>

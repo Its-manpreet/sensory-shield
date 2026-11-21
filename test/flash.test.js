@@ -15,6 +15,15 @@ for (const [name, gen] of [
   ['3 Hz flash on a 15% box (below minAreaFraction)', () => scenes.flashBox(3, { x: 0.3, y: 0.3, w: 0.39, h: 0.39 })],
   ['small corner flash at 6 Hz', () => scenes.flashBox(6, { x: 0, y: 0, w: 0.2, h: 0.2 })],
   ['normal video with scene cuts', () => scenes.normalVideo()],
+  ...[300, 800, 1500, 2500, 4000, 6000].map((px) => [`scrolling photo grid at ${px} px/s`, () => scenes.scrollPhotos(px)]),
+  ...[800, 2500].map((px) => [`scrolling dark-mode photo grid at ${px} px/s`, () => scenes.scrollPhotos(px, { dark: true })]),
+  ['scrolling photo grid at 2000 px/s, 60 fps', () => scenes.scrollPhotos(2000, { fps: 60 })],
+  ['flick-scrolling a photo grid', () => scenes.scrollPhotos(6000, { profile: 'flick' })],
+  ['jiggling a photo grid up and down', () => scenes.scrollPhotos(0, { profile: 'jiggle' })],
+  ...[1000, 3000].map((px) => [`scrolling a text page at ${px} px/s`, () => scenes.scrollText(px)]),
+  ['scrolling a dark-mode text page at 2000 px/s', () => scenes.scrollText(2000, 4, true)],
+  ...[1000, 3000].map((px) => [`sideways scrolling a photo carousel at ${px} px/s`, () => scenes.scrollPhotos(px, { horizontal: true })]),
+  ...[800, 2500].map((px) => [`scrolling photos, aliased downscale (1 sample per cell) at ${px} px/s`, () => scenes.scrollPhotos(px, { ss: 1 })]),
 ]) {
   test(`no events: ${name}`, () => {
     assert.equal(anyEvents(run(createFlashDetector(), gen())), false);
@@ -37,6 +46,12 @@ for (const [name, gen, kind] of [
     assert.ok(area > 0.95, `covered area ${area}`);
   });
 }
+
+test('flashing video while the page around it scrolls: still detected', () => {
+  const hit = firstActive(run(createFlashDetector(), scenes.flashWhileScrolling(6, 1500)));
+  assert.ok(hit, 'expected an active event');
+  assert.ok(hit.tMs <= 1200, `first event at ${hit.tMs} ms`);
+});
 
 test('flash inside half the screen: rects stay near the flashing box', () => {
   const box = { x: 0.25, y: 0.25, w: 0.5, h: 0.5 };

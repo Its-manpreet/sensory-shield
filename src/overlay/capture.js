@@ -18,13 +18,21 @@ export async function startCapture(video) {
 export function createSampler(video, { gridW = 64, gridH = 36, tilesX = 4, tilesY = 3, changeThreshold = 6 } = {}) {
   const c = new OffscreenCanvas(gridW, gridH);
   const ctx = /** @type {OffscreenCanvasRenderingContext2D} */ (c.getContext('2d', { willReadFrequently: true }));
+  // Two-step downscale: one 46x jump samples only a few pixels per cell, so scrolling text and photos
+  // shimmer (aliasing) and can look like flicker. A 4x-grid intermediate with high-quality smoothing
+  // gives true area averages, which keeps motion looking like motion to the flash detector.
+  const mid = new OffscreenCanvas(gridW * 4, gridH * 4);
+  const mctx = /** @type {OffscreenCanvasRenderingContext2D} */ (mid.getContext('2d'));
+  mctx.imageSmoothingQuality = 'high';
+  ctx.imageSmoothingQuality = 'high';
   let current = new Uint8ClampedArray(gridW * gridH * 4);
   let lastChecked = null;
 
   return {
     /** @returns {Uint8ClampedArray} RGBA gridW*gridH*4 of the latest frame */
     sample() {
-      ctx.drawImage(video, 0, 0, gridW, gridH);
+      mctx.drawImage(video, 0, 0, mid.width, mid.height);
+      ctx.drawImage(mid, 0, 0, gridW, gridH);
       current = ctx.getImageData(0, 0, gridW, gridH).data;
       return current;
     },
