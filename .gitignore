@@ -11,6 +11,7 @@ assets/clips/*
 *.onnx
 *.bin
 *.safetensors
+*.gguf
 dist/
 out/
 .DS_Store
@@ -18,3 +19,5 @@ out/
 .env
 # local diagnostics (numbers only)
 logs/
+# llama.cpp binaries, fetched per platform by npm run vision:setup
+vendor/

@@ -6,11 +6,12 @@ const $ = (id) => document.getElementById(id);
 const shield = window.shield; // undefined when opened as a plain web page (mock store)
 
 const PROFILE_HINTS = {
-  photosensitive: 'Strict flash softening with red-flash detection. Content blurring off.',
+  photosensitive: 'Strict flash softening with red-flash detection.',
   'graphic-sensitive': 'Softens flashing and blurs graphic content.',
   custom: 'Your own mix. Add the triggers that matter to you.',
 };
 const PRESET_LABELS = { 'graphic-violence': 'graphic violence', 'graphic-injury': 'graphic injury' };
+const SUGGESTIONS = ['gore', 'pornography', 'spiders', 'clowns', 'needles'];
 const HOTKEY_LABELS = { reveal: 'Reveal for 5 s', toggle: 'Shield on / off', settings: 'Open this window' };
 
 /** @type {import('../shared/types.js').Settings} */
@@ -102,12 +103,36 @@ function renderChips() {
       x.addEventListener('click', () => {
         patchProfile('content', { [kind]: profile().content[kind].filter((v) => v !== key) });
         renderChips();
+        renderSuggestions();
         $('trigger-input').focus();
       });
       li.append(x);
       return li;
     }),
   );
+}
+
+function renderSuggestions() {
+  const p = profile();
+  const have = new Set([...p.content.customTriggers, ...p.content.categories]);
+  $('suggest').replaceChildren(
+    ...SUGGESTIONS.filter((w) => !have.has(w)).map((w) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = `+ ${w}`;
+      b.setAttribute('aria-label', `Add ${w}`);
+      b.addEventListener('click', () => addTrigger(w));
+      return b;
+    }),
+  );
+}
+
+function addTrigger(raw) {
+  const text = raw.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (!text || profile().content.customTriggers.includes(text)) return;
+  // adding a trigger implies the user wants content protection on
+  patchProfile('content', { customTriggers: [...profile().content.customTriggers, text], enabled: true });
+  render();
 }
 
 function render() {
@@ -142,6 +167,7 @@ function render() {
   $('sensitivity').value = sens;
   $('sens-out').textContent = sens < 30 ? 'Low' : sens < 50 ? 'Medium' : 'High';
   renderChips();
+  renderSuggestions();
 
   $('fade').value = p.response.fadeMs;
   $('fade-out').textContent = `${p.response.fadeMs} ms`;
@@ -151,7 +177,7 @@ function render() {
 
 function renderStats(st) {
   lastStats = st;
-  const model = { loading: 'loading model', failed: 'model unavailable', stub: 'model not installed', webgpu: 'WebGPU', wasm: 'CPU' }[st.device] ?? st.device;
+  const model = { off: 'off', loading: 'starting vision model…', failed: 'vision model unavailable' }[st.device] ?? st.device.replace(/^llama\.cpp /, '');
   $('stats').textContent =
     st.capture === 'ok'
       ? `${st.fps.toFixed(0)} fps · flash check ${st.flashMs.toFixed(2)} ms · content ${model}${st.modelHz ? `, ${st.modelHz.toFixed(1)} checks/s` : ''}`
@@ -197,12 +223,8 @@ $('content-enabled').addEventListener('click', () => {
 $('trigger-form').addEventListener('submit', (e) => {
   e.preventDefault();
   const input = $('trigger-input');
-  const text = input.value.trim().replace(/\s+/g, ' ').toLowerCase();
+  addTrigger(input.value);
   input.value = '';
-  if (!text || profile().content.customTriggers.includes(text)) return;
-  // adding a trigger implies the user wants content protection on
-  patchProfile('content', { customTriggers: [...profile().content.customTriggers, text], enabled: true });
-  render();
   input.focus();
 });
 $('sensitivity').addEventListener('input', (e) => {

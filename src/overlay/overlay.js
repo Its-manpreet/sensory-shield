@@ -8,7 +8,8 @@ import { createEffects } from './effects.js';
 import { toRegions } from './regions.js';
 import { startCapture, createSampler } from './capture.js';
 
-const CONTENT_INTERVAL_MS = 333; // about 3 checks per second
+// A vision-model check takes ~1-2 s; checks run back to back while the screen keeps changing, at most this often.
+const CONTENT_INTERVAL_MS = 500;
 const TILES = { tilesX: 4, tilesY: 3 };
 
 const video = /** @type {HTMLVideoElement} */ (document.getElementById('capture'));
@@ -27,24 +28,35 @@ const sampler = createSampler(video, TILES);
 
 // --- content detector: optional. If it fails, flash protection keeps running. ---
 let content = null;
-let contentInfo = { device: 'loading', modelId: '', loadMs: 0 };
+let contentInfo = { device: 'off', modelId: '', loadMs: 0 };
+let contentLoading = null;
 let captureState = 'starting'; // 'starting' | 'ok' | 'denied'
 let lastTiles = [];
 let contentBusy = false;
 let lastContentAt = 0;
 let forceAllTiles = false;
 
-async function loadContent() {
-  try {
-    const det = await createContentDetector({ ...TILES });
-    contentInfo = await det.init();
-    await det.setTriggers(triggersForProfile(profile));
-    content = det;
-    log(`content detector ready: ${contentInfo.device} ${contentInfo.modelId} in ${Math.round(contentInfo.loadMs)} ms`);
-  } catch (err) {
-    contentInfo = { device: 'failed', modelId: '', loadMs: 0 };
-    log(`content detector unavailable, flash protection only: ${err?.message ?? err}`);
-  }
+/** the vision model is large (~1.3 GB in memory): load it only once content protection has something to do */
+const wantsContent = (p) => p.content.enabled && triggersForProfile(p).length > 0;
+
+function loadContent() {
+  if (content || contentLoading) return;
+  contentInfo = { device: 'loading', modelId: '', loadMs: 0 };
+  contentLoading = (async () => {
+    try {
+      const det = await createContentDetector({ ...TILES });
+      contentInfo = await det.init();
+      await det.setTriggers(triggersForProfile(profile));
+      content = det;
+      forceAllTiles = true;
+      log(`content detector ready: ${contentInfo.device} ${contentInfo.modelId} in ${Math.round(contentInfo.loadMs)} ms`);
+    } catch (err) {
+      contentInfo = { device: 'failed', modelId: '', loadMs: 0 };
+      log(`content detector unavailable, flash protection only: ${err?.message ?? err}`);
+    } finally {
+      contentLoading = null;
+    }
+  })();
 }
 
 function applySettings(s) {
@@ -54,8 +66,11 @@ function applySettings(s) {
   profile = activeProfile(s);
   if (JSON.stringify(profile.flash) !== prevFlash) flash = createFlashDetector({ ...profile.flash });
   const triggers = triggersForProfile(profile);
+  if (wantsContent(profile)) if (wantsContent(profile)) loadContent();
   if (content && JSON.stringify(triggers) !== prevTriggers) {
-    content.setTriggers(triggers).then(() => (lastTiles = []), (e) => log('setTriggers failed', e));
+    // a removed trigger stops blurring at once; new ones are checked on the next pass
+    lastTiles = lastTiles.filter((t) => triggers.some((x) => x.id === t.triggerId));
+    content.setTriggers(triggers).catch((e) => log('setTriggers failed', e));
     lastContentAt = 0; // re-check right away with all tiles
     sampler.changedTiles(); // reset baseline; next check is forced below
     forceAllTiles = true;
@@ -105,10 +120,11 @@ async function checkContent(now) {
   try {
     const changed = sampler.changedTiles();
     if (forceAllTiles) changed.fill(true), (forceAllTiles = false);
-    if (changed.some(Boolean) || !lastTiles.length) {
+    // static screen: no model run at all (the first call and forced re-checks report every tile changed)
+    if (changed.some(Boolean)) {
       const t0 = performance.now();
       const bitmap = await createImageBitmap(video);
-      lastTiles = await content.scoreTiles(bitmap, lastTiles.length ? changed : undefined);
+      lastTiles = await content.scoreTiles(bitmap, changed);
       bitmap.close();
       stats.modelMs += performance.now() - t0;
       stats.modelRuns++;
@@ -154,7 +170,7 @@ try {
   captureState = 'denied';
   log(`capture failed: ${err?.name} ${err?.message}`);
 }
-loadContent();
+if (wantsContent(profile)) loadContent();
 
 if (selftest) {
   log(`window ${screenX},${screenY} ${innerWidth}x${innerHeight} vs screen ${screen.width}x${screen.height} @${devicePixelRatio}x`);

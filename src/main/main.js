@@ -3,6 +3,7 @@ import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, screen, sessio
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings } from './settings-file.js';
+import { startVision, analyzeScreen } from './vision.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const SRC = path.join(here, '..');
@@ -143,6 +144,9 @@ function registerIpc() {
     app.relaunch();
     app.exit(0);
   });
+  // on-device vision model (llama.cpp child process on 127.0.0.1); frames arrive in memory, never stored
+  ipcMain.handle('vision:start', () => startVision());
+  ipcMain.handle('vision:analyze', (_e, { jpeg, terms, classify }) => analyzeScreen(jpeg, terms, { classify }));
   ipcMain.on('shield:stats', (_e, stats) => {
     lastStats = stats; // counts only, never pixels
     settingsWin?.isDestroyed() === false && settingsWin.webContents.send('shield:stats', stats);

@@ -19,4 +19,6 @@ contextBridge.exposeInMainWorld('shield', {
   getStatus: () => ipcRenderer.invoke('shield:status'),
   openPermission: () => ipcRenderer.send('shield:open-permission'),
   relaunch: () => ipcRenderer.send('shield:relaunch'),
+  visionStart: () => ipcRenderer.invoke('vision:start'),
+  visionAnalyze: (jpeg, terms, classify) => ipcRenderer.invoke('vision:analyze', { jpeg, terms, classify }),
 });

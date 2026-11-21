@@ -24,7 +24,7 @@ export function toRegions(flashEvents, tiles, profile) {
     for (const t of tiles) {
       if (!t.triggerId) continue;
       regions.push({
-        id: `tile-${t.rect.x.toFixed(3)}-${t.rect.y.toFixed(3)}`,
+        id: t.id ?? `tile-${t.rect.x.toFixed(3)}-${t.rect.y.toFixed(3)}`, // detectors may give stable ids
         rect: t.rect,
         effect: 'blur',
         reason: `Blurred: ${t.label ?? t.triggerId}`,
