@@ -11,7 +11,7 @@ const SMALL = 1 / 12; // blur works on a 1/12-size copy: cheaper and softer than
 /**
  * @param {HTMLCanvasElement} canvas  full-screen canvas in the overlay
  * @param {HTMLVideoElement} video    captured screen
- * @param {{ fadeMs?: number }} [opts]
+ * @param {{ fadeMs?: number, cssSize?: () => [number, number] }} [opts]  cssSize: canvas size in CSS px (default: window)
  */
 export function createEffects(canvas, video, opts = {}) {
   const ctx = /** @type {CanvasRenderingContext2D} */ (canvas.getContext('2d'));
@@ -25,8 +25,9 @@ export function createEffects(canvas, video, opts = {}) {
   const live = new Map();
 
   function resize() {
-    const w = Math.round(innerWidth * devicePixelRatio);
-    const h = Math.round(innerHeight * devicePixelRatio);
+    const [cw, ch] = opts.cssSize ? opts.cssSize() : [innerWidth, innerHeight];
+    const w = Math.round(cw * devicePixelRatio);
+    const h = Math.round(ch * devicePixelRatio);
     if (canvas.width !== w || canvas.height !== h) Object.assign(canvas, { width: w, height: h });
   }
 
@@ -61,10 +62,17 @@ export function createEffects(canvas, video, opts = {}) {
     ctx.restore();
   }
 
-  function drawDim(rect, strength, alpha) {
-    const { d } = px(rect);
-    ctx.fillStyle = `rgba(12, 14, 18, ${Math.min(0.97, strength) * alpha})`;
-    ctx.fillRect(...d);
+  /** all dim rects are filled as ONE path, so overlapping rects do not stack into darker seams */
+  function drawDims(entries) {
+    if (!entries.length) return;
+    ctx.beginPath();
+    let a = 0;
+    for (const e of entries) {
+      ctx.rect(...px(e.region.rect).d);
+      a = Math.max(a, Math.min(0.97, e.region.strength) * e.alpha);
+    }
+    ctx.fillStyle = `rgba(12, 14, 18, ${a})`;
+    ctx.fill('nonzero');
   }
 
   function drawFreeze(entry, alpha) {
@@ -110,6 +118,8 @@ export function createEffects(canvas, video, opts = {}) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const step = fadeMs > 0 ? dt / fadeMs : 1;
     const revealing = nowMs < revealUntil;
+    const dims = [];
+    const labels = [];
     for (const [id, e] of live) {
       const wanted = !revealing && nowMs - e.seenAt <= HOLD_MS;
       e.alpha = Math.max(0, Math.min(1, e.alpha + (wanted ? step : -step)));
@@ -118,11 +128,20 @@ export function createEffects(canvas, video, opts = {}) {
         continue;
       }
       if (!video.videoWidth) continue;
-      const { rect, effect, strength, reason } = e.region;
+      const { rect, effect, strength } = e.region;
       if (effect === 'blur') drawBlur(rect, strength, e.alpha);
       else if (effect === 'freeze') drawFreeze(e, e.alpha);
-      else drawDim(rect, strength, e.alpha);
-      if (labelsVisible && reason) drawLabel(rect, reason, e.alpha);
+      else dims.push(e);
+      if (labelsVisible && e.region.reason) labels.push(e);
+    }
+    drawDims(dims);
+    // one label per distinct reason, on its top-left region, so a dimmed area is not covered in labels
+    const seen = new Set();
+    labels.sort((p, q) => p.region.rect.y - q.region.rect.y || p.region.rect.x - q.region.rect.x);
+    for (const e of labels) {
+      if (seen.has(e.region.reason)) continue;
+      seen.add(e.region.reason);
+      drawLabel(e.region.rect, e.region.reason, e.alpha);
     }
   }
 

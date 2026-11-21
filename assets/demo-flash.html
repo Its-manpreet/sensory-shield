@@ -1,0 +1,183 @@
+<!doctype html>
+<!-- OWNER: Agent D. Standalone flash-protection demo: the REAL flash detector (src/engine/flash.js) and
+     effects renderer (src/overlay/effects.js) running on a synthetic clip inside this page.
+     Needs no screen-capture permission. Serve the repo root over http: `npm run demo`. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sensory Shield: flash demo</title>
+    <style>
+      :root {
+        --bg: #f4f5f2; --panel: #ffffff; --ink: #1d2126; --muted: #5d6670; --line: #dde1e4;
+        --accent: #2f6f64; --warn-bg: #fff4dc; --warn-ink: #6b4a00; --on: #2f6f64; --alert: #9a3b2c;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root { --bg: #15181b; --panel: #1e2226; --ink: #e8eaec; --muted: #9aa3ab; --line: #30363b;
+                --accent: #7cc4b5; --warn-bg: #3a2f17; --warn-ink: #f3d79b; --on: #7cc4b5; --alert: #f09a88; }
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+      main { max-width: 760px; margin: 0 auto; padding: 32px 16px 48px; }
+      h1 { font-size: 26px; margin: 0 0 4px; }
+      .sub { color: var(--muted); margin: 0 0 20px; }
+      .warn { background: var(--warn-bg); color: var(--warn-ink); border-radius: 12px; padding: 14px 16px; margin-bottom: 20px; }
+      .warn strong { display: block; margin-bottom: 4px; }
+      .warn label { display: flex; gap: 10px; align-items: center; margin-top: 8px; font-weight: 600; }
+      .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+      .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+      button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+               padding: 8px 14px; border-radius: 999px; cursor: pointer; }
+      button[aria-pressed="true"] { background: var(--accent); color: var(--panel); border-color: var(--accent); }
+      button:disabled { opacity: 0.45; cursor: not-allowed; }
+      :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+      .stage { position: relative; width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 10px; overflow: hidden; }
+      .stage video, .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+      .stage .idle { position: absolute; inset: 0; display: grid; place-items: center; color: #aab; font-size: 15px; }
+      .row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; margin-top: 14px; }
+      .switch { display: flex; gap: 10px; align-items: center; font-weight: 600; }
+      .switch input { width: 20px; height: 20px; accent-color: var(--accent); }
+      .status { font-weight: 600; }
+      .status[data-state="flash"] { color: var(--alert); }
+      .status[data-state="hold"] { color: var(--accent); }
+      dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 16px 0 0; }
+      dl div { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+      dt { color: var(--muted); font-size: 13px; }
+      dd { margin: 2px 0 0; font-size: 20px; font-variant-numeric: tabular-nums; }
+      .foot { color: var(--muted); font-size: 14px; margin-top: 20px; }
+      @media (max-width: 560px) { dl { grid-template-columns: 1fr 1fr; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Sensory Shield: flash protection</h1>
+      <p class="sub">The real detector and effects renderer, running on synthetic test clips. Everything stays on this device.</p>
+
+      <div class="warn" role="alert">
+        <strong>Flashing content warning</strong>
+        Some clips below flash 3 to 6 times per second. The detector dims them within about a second, but the first
+        flashes are visible. If you or anyone nearby has photosensitive epilepsy, do not play the flashing clips.
+        <label><input type="checkbox" id="consent" /> I understand. Enable the flashing clips.</label>
+      </div>
+
+      <section class="panel">
+        <div class="controls" role="group" aria-label="Test clip">
+          <button data-clip="clips/normal-video.webm">Normal video</button>
+          <button data-clip="clips/FLASH-WARNING-flash-3hz.webm" data-flash disabled>Flash 3 Hz</button>
+          <button data-clip="clips/FLASH-WARNING-flash-6hz.webm" data-flash disabled>Flash 6 Hz</button>
+          <button data-clip="clips/FLASH-WARNING-red-flash-4hz.webm" data-flash disabled>Red flash 4 Hz</button>
+          <button id="stop">Stop</button>
+        </div>
+
+        <div class="stage">
+          <video id="video" muted playsinline loop></video>
+          <canvas id="fx" aria-hidden="true"></canvas>
+          <div class="idle" id="idle">Choose a clip</div>
+        </div>
+
+        <div class="row">
+          <label class="switch"><input type="checkbox" id="protect" checked /> Protection on</label>
+          <span class="status" id="status" role="status" aria-live="polite" data-state="idle">Idle</span>
+        </div>
+
+        <dl>
+          <div><dt>Time to first dim</dt><dd id="m-detect">–</dd></div>
+          <div><dt>Detector time per frame</dt><dd id="m-push">–</dd></div>
+          <div><dt>Frames checked</dt><dd id="m-frames">0</dd></div>
+        </dl>
+      </section>
+
+      <p class="foot">Reduces exposure to known triggers; it is not a medical device and does not prevent seizures.
+        Clips auto-stop after 12 seconds.</p>
+    </main>
+
+    <script type="module">
+      import { createFlashDetector } from '../src/engine/flash.js';
+      import { createEffects } from '../src/overlay/effects.js';
+      import { toRegions } from '../src/overlay/regions.js';
+      import { DEFAULT_PROFILES } from '../src/shared/profiles.js';
+
+      const profile = DEFAULT_PROFILES.photosensitive;
+      const $ = (id) => document.getElementById(id);
+      const video = $('video'), canvas = $('fx'), stage = canvas.parentElement;
+      const effects = createEffects(canvas, video, {
+        fadeMs: profile.response.fadeMs,
+        cssSize: () => [stage.clientWidth, stage.clientHeight],
+      });
+      const small = new OffscreenCanvas(64, 36).getContext('2d', { willReadFrequently: true });
+
+      let detector = createFlashDetector({ ...profile.flash });
+      let startedAt = 0, firstDim = null, frames = 0, pushTotal = 0, stopTimer = 0, playing = false, run = 0;
+
+      $('consent').addEventListener('change', (e) => {
+        for (const b of document.querySelectorAll('[data-flash]')) b.disabled = !e.target.checked;
+        if (!e.target.checked && video.currentSrc.includes('FLASH-WARNING')) stop();
+      });
+
+      for (const b of document.querySelectorAll('[data-clip]')) {
+        b.addEventListener('click', () => play(b));
+      }
+      $('stop').addEventListener('click', stop);
+      $('protect').addEventListener('change', (e) => { if (!e.target.checked) effects.clear(); });
+
+      async function play(button) {
+        stop();
+        for (const b of document.querySelectorAll('[data-clip]')) b.setAttribute('aria-pressed', String(b === button));
+        detector = createFlashDetector({ ...profile.flash });
+        firstDim = null; frames = 0; pushTotal = 0;
+        $('m-detect').textContent = '–'; $('m-frames').textContent = '0'; $('m-push').textContent = '–';
+        video.src = button.dataset.clip;
+        await video.play();
+        $('idle').hidden = true;
+        playing = true;
+        startedAt = performance.now();
+        const myRun = ++run; // a stale callback from the previous clip must not keep its own loop going
+        const tick = (now) => { if (myRun === run) (video.requestVideoFrameCallback(tick), onFrame(now)); };
+        video.requestVideoFrameCallback(tick);
+        stopTimer = setTimeout(stop, 12000);
+      }
+
+      function stop() {
+        clearTimeout(stopTimer);
+        playing = false;
+        run++;
+        video.pause();
+        video.removeAttribute('src');
+        video.load();
+        effects.clear();
+        $('idle').hidden = false;
+        setStatus('idle', 'Idle');
+        for (const b of document.querySelectorAll('[data-clip]')) b.setAttribute('aria-pressed', 'false');
+      }
+
+      function setStatus(state, text) {
+        const s = $('status');
+        if (s.dataset.state !== state) Object.assign(s.dataset, { state }), (s.textContent = text);
+      }
+
+      function onFrame(now) {
+        if (!playing) return;
+        small.drawImage(video, 0, 0, 64, 36);
+        const data = small.getImageData(0, 0, 64, 36).data;
+        const t0 = performance.now();
+        const events = detector.push({ data, tMs: now });
+        pushTotal += performance.now() - t0;
+        frames++;
+
+        if (events.some((e) => e.active)) {
+          if (firstDim === null) firstDim = now - startedAt;
+          const red = events.some((e) => e.kind === 'red');
+          setStatus('flash', red ? 'Red flashing detected: dimmed' : 'Flashing detected: dimmed');
+        } else if (events.length) setStatus('hold', 'Holding the dim until the flashing has clearly stopped');
+        else setStatus('watch', 'Watching: no flashing');
+
+        if ($('protect').checked) effects.setRegions(toRegions(events, [], profile), now);
+        $('m-frames').textContent = String(frames);
+        $('m-push').textContent = `${(pushTotal / frames).toFixed(2)} ms`;
+        $('m-detect').textContent = firstDim === null ? '–' : `${Math.round(firstDim)} ms`;
+      }
+
+      (function loop(now) { requestAnimationFrame(loop); effects.draw(now); })(performance.now());
+    </script>
+  </body>
+</html>
