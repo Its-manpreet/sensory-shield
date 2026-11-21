@@ -1,6 +1,6 @@
 <!doctype html>
-<!-- OWNER: Agent D. SCAFFOLD placeholder. Also opens in a plain browser (mock store) for fast UI work:
-     run `npx http-server -c-1 .` or similar from the repo root and open /src/settings/index.html -->
+<!-- OWNER: Agent D. Settings window. Also opens in a plain browser with a mock store: `npm run demo`, then
+     http://localhost:8765/src/settings/index.html -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -9,12 +9,103 @@
     <link rel="stylesheet" href="./settings.css" />
   </head>
   <body>
+    <header class="titlebar">
+      <div class="brand">
+        <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+          <path d="M16 3 5 7v8c0 7 4.7 12.4 11 14 6.3-1.6 11-7 11-14V7L16 3Z" />
+          <path class="logo-mark" d="M11 16.5c1.6-2.4 3.2-3.5 5-3.5s3.4 1.1 5 3.5c-1.6 2.4-3.2 3.5-5 3.5s-3.4-1.1-5-3.5Z" />
+        </svg>
+        <div>
+          <h1>Sensory Shield</h1>
+          <p class="tagline">Reduces exposure to known triggers, on this device only.</p>
+        </div>
+      </div>
+    </header>
+
     <main>
-      <h1>Sensory Shield</h1>
-      <p class="tagline">Reduces exposure to known triggers. Everything stays on this device.</p>
-      <label class="row"><input type="checkbox" id="enabled" /> Shield on</label>
-      <label class="row">Profile <select id="profile"></select></label>
-      <p id="status" role="status" aria-live="polite">Loading…</p>
+      <section class="hero card" aria-labelledby="hero-title">
+        <div class="hero-text">
+          <h2 id="hero-title">Protection</h2>
+          <p id="hero-state" class="state" role="status" aria-live="polite">Starting…</p>
+        </div>
+        <button id="enabled" class="switch big" role="switch" aria-checked="false" aria-labelledby="hero-title"><span></span></button>
+      </section>
+
+      <section id="permission" class="card notice" hidden aria-labelledby="perm-title">
+        <h2 id="perm-title">Screen access needed</h2>
+        <p>To soften flashing in any app, Sensory Shield needs to see the screen. Frames are analysed in memory and never saved or sent anywhere.</p>
+        <ol>
+          <li>Open Privacy settings and turn on <strong id="perm-app">this app</strong> under Screen &amp; System Audio Recording.</li>
+          <li>Relaunch Sensory Shield.</li>
+        </ol>
+        <div class="actions">
+          <button id="open-permission" class="btn primary">Open Privacy settings</button>
+          <button id="relaunch" class="btn">Relaunch</button>
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="profile-title">
+        <h2 id="profile-title">Profile</h2>
+        <div id="profiles" class="segmented" role="radiogroup" aria-labelledby="profile-title"></div>
+        <p id="profile-hint" class="hint"></p>
+      </section>
+
+      <section class="card" aria-labelledby="flash-title">
+        <div class="section-head">
+          <h2 id="flash-title">Flashing</h2>
+          <button id="flash-enabled" class="switch" role="switch" aria-checked="false" aria-label="Flash protection"><span></span></button>
+        </div>
+        <div class="field">
+          <span class="label" id="style-label">Softening style</span>
+          <div id="flash-style" class="segmented two" role="radiogroup" aria-labelledby="style-label">
+            <button role="radio" data-value="glass">Glass fog</button>
+            <button role="radio" data-value="dim">Dim</button>
+          </div>
+        </div>
+        <div class="field" id="smooth-field">
+          <label for="smooth">Colour smoothing <output id="smooth-out" for="smooth"></output></label>
+          <input id="smooth" type="range" min="300" max="2500" step="100" />
+          <p class="hint">How slowly colours change under the glass. Slower is calmer.</p>
+        </div>
+        <div class="field" id="dim-field">
+          <label for="dim">Dim level <output id="dim-out" for="dim"></output></label>
+          <input id="dim" type="range" min="40" max="97" step="1" />
+        </div>
+        <label class="check"><input id="red" type="checkbox" /> Also watch for saturated red flashes</label>
+      </section>
+
+      <section class="card" aria-labelledby="content-title">
+        <div class="section-head">
+          <h2 id="content-title">Content</h2>
+          <button id="content-enabled" class="switch" role="switch" aria-checked="false" aria-label="Content protection"><span></span></button>
+        </div>
+        <div class="field">
+          <label for="trigger-input">Blur anything that shows</label>
+          <form id="trigger-form" class="trigger-form">
+            <input id="trigger-input" type="text" placeholder="Type a trigger, e.g. spiders" autocomplete="off" />
+            <button class="btn primary" type="submit">Add</button>
+          </form>
+          <ul id="chips" class="chips" aria-label="Active triggers"></ul>
+        </div>
+        <div class="field">
+          <label for="sensitivity">Sensitivity <output id="sens-out" for="sensitivity"></output></label>
+          <input id="sensitivity" type="range" min="10" max="70" step="1" />
+        </div>
+      </section>
+
+      <section class="card" aria-labelledby="look-title">
+        <h2 id="look-title">Appearance</h2>
+        <div class="field">
+          <label for="fade">Fade time <output id="fade-out" for="fade"></output></label>
+          <input id="fade" type="range" min="0" max="1200" step="50" />
+        </div>
+        <label class="check"><input id="labels" type="checkbox" /> Show a small label saying why</label>
+      </section>
+
+      <footer class="foot">
+        <dl class="keys" id="keys"></dl>
+        <p id="stats" class="stats" aria-live="off"></p>
+      </footer>
     </main>
     <script type="module" src="./settings.js"></script>
   </body>

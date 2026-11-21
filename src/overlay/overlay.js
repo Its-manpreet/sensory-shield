@@ -19,14 +19,15 @@ const log = (...a) => console.log('[shield]', ...a);
 
 let settings = await getSettings();
 let profile = activeProfile(settings);
-const effects = createEffects(canvas, video, { fadeMs: profile.response.fadeMs });
+const effects = createEffects(canvas, video, { fadeMs: profile.response.fadeMs, ...settings.appearance });
 effects.setLabelsVisible(profile.response.showLabel);
 let flash = createFlashDetector({ ...profile.flash });
 const sampler = createSampler(video, TILES);
 
 // --- content detector: optional. If it fails, flash protection keeps running. ---
 let content = null;
-let contentInfo = { device: 'off', modelId: '', loadMs: 0 };
+let contentInfo = { device: 'loading', modelId: '', loadMs: 0 };
+let captureState = 'starting'; // 'starting' | 'ok' | 'denied'
 let lastTiles = [];
 let contentBusy = false;
 let lastContentAt = 0;
@@ -58,7 +59,7 @@ function applySettings(s) {
     sampler.changedTiles(); // reset baseline; next check is forced below
     forceAllTiles = true;
   }
-  effects.setFadeMs(profile.response.fadeMs);
+  effects.setStyle({ fadeMs: profile.response.fadeMs, ...s.appearance });
   effects.setLabelsVisible(profile.response.showLabel);
   if (!s.enabled) effects.clear();
 }
@@ -77,6 +78,7 @@ setInterval(() => {
     modelMs: stats.modelRuns ? stats.modelMs / stats.modelRuns : 0,
     modelHz: stats.modelRuns / secs,
     device: contentInfo.device,
+    capture: captureState,
   };
   window.shield?.sendStats(out);
   if (selftest) log('stats', JSON.stringify(out));
@@ -129,10 +131,12 @@ function onAnimationFrame(now) {
 
 try {
   await startCapture(video);
+  captureState = 'ok';
   log(`capture started ${video.videoWidth}x${video.videoHeight}, window ${innerWidth}x${innerHeight} @${devicePixelRatio}x`);
   video.requestVideoFrameCallback(onFrame);
   requestAnimationFrame(onAnimationFrame);
 } catch (err) {
+  captureState = 'denied';
   log(`capture failed: ${err?.name} ${err?.message}`);
 }
 loadContent();

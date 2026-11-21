@@ -23,6 +23,7 @@ export {};
  * }} Profile
  */
 
-/** @typedef {{enabled: boolean, activeProfileId: string, profiles: Record<string, Profile>}} Settings */
+/** @typedef {{flashStyle: 'glass'|'dim', smoothMs: number}} Appearance */
+/** @typedef {{enabled: boolean, activeProfileId: string, profiles: Record<string, Profile>, appearance: Appearance}} Settings */
 
 /** @typedef {{fps: number, flashMs: number, modelMs: number, modelHz: number}} ShieldStats */

@@ -15,7 +15,7 @@ export function toRegions(flashEvents, tiles, profile) {
         id: `flash-${i}-${ev.rect.x.toFixed(3)}-${ev.rect.y.toFixed(3)}`,
         rect: ev.rect,
         effect: 'dim',
-        reason: ev.kind === 'red' ? 'Red flashing dimmed' : 'Flashing dimmed',
+        reason: ev.kind === 'red' ? 'Red flashing softened' : 'Flashing softened',
         strength: profile.response.dimLevel,
       });
     });

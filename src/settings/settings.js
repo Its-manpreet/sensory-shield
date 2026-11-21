@@ -1,21 +1,244 @@
-// OWNER: Agent D. SCAFFOLD placeholder: proves store + IPC round trip. D builds the real UI here.
+// OWNER: Agent D. Settings window: edits the active profile and app appearance, shows live status.
+// Every change is saved immediately and the overlay applies it without a restart.
 import { getSettings, setSettings, onChange } from '../shared/store.js';
 
 const $ = (id) => document.getElementById(id);
+const shield = window.shield; // undefined when opened as a plain web page (mock store)
 
-function render(s) {
-  $('enabled').checked = s.enabled;
-  $('profile').replaceChildren(
-    ...Object.values(s.profiles).map((p) => new Option(p.name, p.id, false, p.id === s.activeProfileId)),
-  );
-  $('status').textContent = `Shield ${s.enabled ? 'on' : 'off'}, profile: ${s.profiles[s.activeProfileId]?.name}`;
+const PROFILE_HINTS = {
+  photosensitive: 'Strict flash softening with red-flash detection. Content blurring off.',
+  'graphic-sensitive': 'Softens flashing and blurs graphic content.',
+  custom: 'Your own mix. Add the triggers that matter to you.',
+};
+const PRESET_LABELS = { 'graphic-violence': 'graphic violence', 'graphic-injury': 'graphic injury' };
+const HOTKEY_LABELS = { reveal: 'Reveal for 5 s', toggle: 'Shield on / off', settings: 'Open this window' };
+
+/** @type {import('../shared/types.js').Settings} */
+let settings;
+let status = { screenAccess: 'granted', platform: 'web', hotkeys: {} };
+let lastStats = null;
+
+const profile = () => settings.profiles[settings.activeProfileId];
+
+/** save a change to the active profile */
+function patchProfile(section, values) {
+  const p = profile();
+  const next = { ...p, [section]: { ...p[section], ...values } };
+  settings = { ...settings, profiles: { ...settings.profiles, [p.id]: next } };
+  save({ profiles: settings.profiles });
 }
 
-$('enabled').addEventListener('change', (e) => setSettings({ enabled: e.target.checked }));
-$('profile').addEventListener('change', (e) => setSettings({ activeProfileId: e.target.value }));
-onChange(render);
-window.shield?.onStats((st) => ($('status').dataset.stats = `${st.modelHz.toFixed(1)} checks/s`));
+let pending = null;
+let timer = 0;
+/** throttled save so sliders feel live without flooding IPC */
+function save(patch) {
+  pending = { ...pending, ...patch };
+  if (timer) return;
+  timer = setTimeout(async () => {
+    const p = pending;
+    pending = null;
+    timer = 0;
+    settings = await setSettings(p);
+  }, 120);
+}
 
-const s = await getSettings();
-render(s);
-console.log(`SELFTEST settings ok: ${Object.keys(s.profiles).length} profiles`);
+function setSwitch(el, on) {
+  el.setAttribute('aria-checked', String(on));
+}
+
+function setRadio(group, value) {
+  for (const b of group.querySelectorAll('[role="radio"]')) {
+    const on = b.dataset.value === value;
+    b.setAttribute('aria-checked', String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
+}
+
+/** arrow-key navigation inside a radiogroup, as screen-reader users expect */
+function radioKeys(group, onPick) {
+  group.addEventListener('keydown', (e) => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    const items = [...group.querySelectorAll('[role="radio"]')];
+    const i = items.indexOf(document.activeElement);
+    const next = items[(i + (e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 1) + items.length) % items.length];
+    next.focus();
+    onPick(next.dataset.value);
+    e.preventDefault();
+  });
+  group.addEventListener('click', (e) => {
+    const b = e.target.closest('[role="radio"]');
+    if (b) onPick(b.dataset.value);
+  });
+}
+
+function renderHero() {
+  const el = $('hero-state');
+  const capture = lastStats?.capture;
+  let text, tone;
+  if (!settings.enabled) (text = 'Paused. Nothing is being softened.'), (tone = '');
+  else if (status.screenAccess === 'denied' || capture === 'denied') (text = 'Waiting for screen access'), (tone = 'warn');
+  else if (capture === 'ok') (text = 'On. Watching for flashing in every app.'), (tone = 'good');
+  else (text = 'Starting…'), (tone = '');
+  el.textContent = text;
+  el.dataset.tone = tone;
+  $('permission').hidden = !(status.platform === 'darwin' && (status.screenAccess !== 'granted' || capture === 'denied'));
+}
+
+function renderChips() {
+  const p = profile();
+  const items = [
+    ...p.content.categories.map((c) => ({ label: PRESET_LABELS[c] ?? c, key: c, kind: 'categories' })),
+    ...p.content.customTriggers.map((c) => ({ label: c, key: c, kind: 'customTriggers' })),
+  ];
+  $('chips').replaceChildren(
+    ...items.map(({ label, key, kind }) => {
+      const li = document.createElement('li');
+      if (kind === 'categories') li.className = 'preset';
+      li.append(label);
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.textContent = '×';
+      x.setAttribute('aria-label', `Remove ${label}`);
+      x.addEventListener('click', () => {
+        patchProfile('content', { [kind]: profile().content[kind].filter((v) => v !== key) });
+        renderChips();
+        $('trigger-input').focus();
+      });
+      li.append(x);
+      return li;
+    }),
+  );
+}
+
+function render() {
+  const p = profile();
+  const look = settings.appearance ?? { flashStyle: 'glass', smoothMs: 900 };
+  setSwitch($('enabled'), settings.enabled);
+  $('profiles').replaceChildren(
+    ...Object.values(settings.profiles).map((pr) => {
+      const b = document.createElement('button');
+      b.setAttribute('role', 'radio');
+      b.dataset.value = pr.id;
+      b.textContent = pr.id === 'graphic-sensitive' ? 'Graphic' : pr.name;
+      b.title = pr.name;
+      return b;
+    }),
+  );
+  setRadio($('profiles'), p.id);
+  $('profile-hint').textContent = PROFILE_HINTS[p.id] ?? '';
+
+  setSwitch($('flash-enabled'), p.flash.enabled);
+  setRadio($('flash-style'), look.flashStyle);
+  $('smooth').value = look.smoothMs;
+  $('smooth-out').textContent = `${(look.smoothMs / 1000).toFixed(1)} s`;
+  $('smooth-field').hidden = look.flashStyle !== 'glass';
+  $('dim-field').hidden = look.flashStyle !== 'dim';
+  $('dim').value = Math.round(p.response.dimLevel * 100);
+  $('dim-out').textContent = `${Math.round(p.response.dimLevel * 100)}%`;
+  $('red').checked = p.flash.detectRed;
+
+  setSwitch($('content-enabled'), p.content.enabled);
+  const sens = Math.round((1 - p.content.threshold) * 100);
+  $('sensitivity').value = sens;
+  $('sens-out').textContent = sens < 30 ? 'Low' : sens < 50 ? 'Medium' : 'High';
+  renderChips();
+
+  $('fade').value = p.response.fadeMs;
+  $('fade-out').textContent = `${p.response.fadeMs} ms`;
+  $('labels').checked = p.response.showLabel;
+  renderHero();
+}
+
+function renderStats(st) {
+  lastStats = st;
+  const model = { loading: 'loading model', failed: 'model unavailable', stub: 'model not installed', webgpu: 'WebGPU', wasm: 'CPU' }[st.device] ?? st.device;
+  $('stats').textContent =
+    st.capture === 'ok'
+      ? `${st.fps.toFixed(0)} fps · flash check ${st.flashMs.toFixed(2)} ms · content ${model}${st.modelHz ? `, ${st.modelHz.toFixed(1)} checks/s` : ''}`
+      : '';
+  renderHero();
+}
+
+// --- events ---
+$('enabled').addEventListener('click', () => {
+  settings = { ...settings, enabled: !settings.enabled };
+  setSwitch($('enabled'), settings.enabled);
+  renderHero();
+  save({ enabled: settings.enabled });
+});
+radioKeys($('profiles'), (id) => {
+  settings = { ...settings, activeProfileId: id };
+  render();
+  save({ activeProfileId: id });
+});
+$('flash-enabled').addEventListener('click', () => {
+  patchProfile('flash', { enabled: !profile().flash.enabled });
+  render();
+});
+radioKeys($('flash-style'), (flashStyle) => {
+  settings = { ...settings, appearance: { ...settings.appearance, flashStyle } };
+  render();
+  save({ appearance: settings.appearance });
+});
+$('smooth').addEventListener('input', (e) => {
+  settings = { ...settings, appearance: { ...settings.appearance, smoothMs: Number(e.target.value) } };
+  $('smooth-out').textContent = `${(settings.appearance.smoothMs / 1000).toFixed(1)} s`;
+  save({ appearance: settings.appearance });
+});
+$('dim').addEventListener('input', (e) => {
+  patchProfile('response', { dimLevel: Number(e.target.value) / 100 });
+  $('dim-out').textContent = `${e.target.value}%`;
+});
+$('red').addEventListener('change', (e) => patchProfile('flash', { detectRed: e.target.checked }));
+$('content-enabled').addEventListener('click', () => {
+  patchProfile('content', { enabled: !profile().content.enabled });
+  render();
+});
+$('trigger-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const input = $('trigger-input');
+  const text = input.value.trim().replace(/\s+/g, ' ').toLowerCase();
+  input.value = '';
+  if (!text || profile().content.customTriggers.includes(text)) return;
+  // adding a trigger implies the user wants content protection on
+  patchProfile('content', { customTriggers: [...profile().content.customTriggers, text], enabled: true });
+  render();
+  input.focus();
+});
+$('sensitivity').addEventListener('input', (e) => {
+  const sens = Number(e.target.value);
+  patchProfile('content', { threshold: 1 - sens / 100 });
+  $('sens-out').textContent = sens < 30 ? 'Low' : sens < 50 ? 'Medium' : 'High';
+});
+$('fade').addEventListener('input', (e) => {
+  patchProfile('response', { fadeMs: Number(e.target.value) });
+  $('fade-out').textContent = `${e.target.value} ms`;
+});
+$('labels').addEventListener('change', (e) => patchProfile('response', { showLabel: e.target.checked }));
+$('open-permission').addEventListener('click', () => shield?.openPermission());
+$('relaunch').addEventListener('click', () => shield?.relaunch());
+
+// --- start ---
+settings = await getSettings();
+if (shield) {
+  status = await shield.getStatus();
+  shield.onStats(renderStats);
+  if (status.platform === 'darwin') document.documentElement.classList.add('vibrant');
+  $('perm-app').textContent = 'Terminal (or the app you started Sensory Shield from)';
+}
+onChange((s) => {
+  if (pending) return; // our own echo while a save is in flight
+  settings = s;
+  render();
+});
+$('keys').replaceChildren(
+  ...Object.entries(status.hotkeys ?? {}).flatMap(([k, accel]) => {
+    const dt = document.createElement('dt');
+    dt.textContent = accel.replace('CommandOrControl', status.platform === 'darwin' ? '⌘' : 'Ctrl').replace('Alt', status.platform === 'darwin' ? '⌥' : 'Alt').replaceAll('+', ' ');
+    const dd = document.createElement('dd');
+    dd.textContent = HOTKEY_LABELS[k] ?? k;
+    return [dt, dd];
+  }),
+);
+render();
+console.log(`SELFTEST settings ok: ${Object.keys(settings.profiles).length} profiles`);

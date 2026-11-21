@@ -1,5 +1,5 @@
 // OWNER: Agent A. Electron main process: overlay + settings windows, tray, hotkeys, IPC, capture permission.
-import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, screen, session, desktopCapturer, nativeImage, systemPreferences } from 'electron';
+import { app, BrowserWindow, Tray, Menu, globalShortcut, ipcMain, screen, session, desktopCapturer, nativeImage, systemPreferences, shell } from 'electron';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, saveSettings } from './settings-file.js';
@@ -41,6 +41,8 @@ function createOverlay() {
     hasShadow: false,
     alwaysOnTop: true,
     enableLargerThanScreen: true,
+    // macOS: a non-activating panel can float above full-screen apps (YouTube in full screen, games, Keynote)
+    ...(process.platform === 'darwin' ? { type: 'panel' } : {}),
     webPreferences: { preload: PRELOAD, sandbox: true, contextIsolation: true, backgroundThrottling: false },
   });
   overlayWin.setAlwaysOnTop(true, 'screen-saver');
@@ -58,10 +60,14 @@ function createOverlay() {
 function openSettings() {
   if (settingsWin && !settingsWin.isDestroyed()) return settingsWin.focus();
   settingsWin = new BrowserWindow({
-    width: 520,
-    height: 720,
+    width: 460,
+    height: 780,
+    minWidth: 400,
+    minHeight: 560,
     title: 'Sensory Shield',
     show: !SELFTEST,
+    backgroundColor: '#f5f5f7',
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset', vibrancy: 'under-window', visualEffectState: 'active', backgroundColor: '#00000000' } : {}),
     webPreferences: { preload: PRELOAD, sandbox: true, contextIsolation: true },
   });
   forwardConsole(settingsWin, 'settings');
@@ -100,6 +106,7 @@ function createTray() {
   for (let i = 0; i < px.length; i += 4) px.set([0xa0, 0x90, 0x20, 0xff], i); // BGRA
   tray = new Tray(nativeImage.createFromBitmap(px, { width: 16, height: 16 }));
   if (process.platform === 'darwin') tray.setTitle('Shield');
+  tray.on('click', openSettings);
   refreshTray();
 }
 
@@ -112,11 +119,24 @@ function registerIpc() {
     refreshTray();
     return settings;
   });
+  ipcMain.handle('shield:status', () => ({ screenAccess: screenAccess(), platform: process.platform, hotkeys: HOTKEYS }));
+  ipcMain.on('shield:open-permission', () => {
+    if (process.platform === 'darwin') shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture');
+  });
+  ipcMain.on('shield:relaunch', () => {
+    app.relaunch();
+    app.exit(0);
+  });
   ipcMain.on('shield:stats', (_e, stats) => {
     lastStats = stats; // counts only, never pixels
     settingsWin?.isDestroyed() === false && settingsWin.webContents.send('shield:stats', stats);
     refreshTray();
   });
+}
+
+/** 'granted' | 'denied' | 'not-determined' | 'restricted' | 'unknown' ('granted' off macOS) */
+function screenAccess() {
+  return process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'granted';
 }
 
 function lockDownNetwork() {
@@ -140,8 +160,7 @@ function registerCaptureHandler() {
       if (!source) throw new Error('no screen sources (screen recording permission?)');
       cb({ video: source });
     } catch (err) {
-      const access = process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'n/a';
-      console.error(`[main] screen capture unavailable (screen access: ${access}): ${err?.message ?? err}`);
+      console.error(`[main] screen capture unavailable (screen access: ${screenAccess()}): ${err?.message ?? err}`);
       try {
         cb({}); // denies the request; getDisplayMedia rejects in the overlay
       } catch {}
@@ -159,8 +178,8 @@ app.whenReady().then(() => {
   globalShortcut.register(HOTKEYS.reveal, () => broadcast('shield:reveal', { ms: REVEAL_MS }));
   globalShortcut.register(HOTKEYS.toggle, () => setEnabled(!settings.enabled));
   globalShortcut.register(HOTKEYS.settings, openSettings);
+  openSettings(); // the window is the app's face; closing it leaves the shield running in the tray
   if (SELFTEST) {
-    openSettings();
     setTimeout(() => app.quit(), SPIKE ? 9000 : 6000);
   }
 });

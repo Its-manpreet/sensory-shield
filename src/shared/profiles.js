@@ -36,8 +36,11 @@ export const DEFAULT_PROFILES = {
 export function defaultSettings() {
   return {
     enabled: true,
-    activeProfileId: 'graphic-sensitive',
+    activeProfileId: 'photosensitive',
     profiles: structuredClone(DEFAULT_PROFILES),
+    // How flashing is softened. 'glass': frosted fog over a time-smoothed copy (colours drift slowly);
+    // 'dim': dark veil. smoothMs: time constant of the colour smoothing. Not part of Profile (frozen contract).
+    appearance: { flashStyle: 'glass', smoothMs: 900 },
   };
 }
 

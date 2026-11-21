@@ -1,28 +1,78 @@
 // OWNER: Agent A. Effects renderer. Contract: docs/INTERFACES.md section 3.
 // A transparent window cannot blur other apps' pixels, so we draw our OWN processed copy of the captured
-// frame over each region: blur = downscale + upscale + small blur filter (cheap), dim = dark veil,
-// freeze = the region as it looked when protection started. Nothing is stored beyond the current frame.
+// frame over each region. Nothing is stored beyond a tiny running average of the current screen.
+//
+// Glass fog (default for flashing, and for content blur): the screen is kept as a small (192x108)
+// TIME-SMOOTHED average: every frame moves each pixel a little toward the new frame (time constant
+// smoothMs). Flashing therefore becomes a slow, low-contrast colour drift. That average is blurred and
+// drawn under a frosted, lightly tinted rounded panel, like a sheet of fogged glass.
 
 const HOLD_MS = 800; // a region that disappears from setRegions stays this long before fading out
-const SMALL = 1 / 12; // blur works on a 1/12-size copy: cheaper and softer than a large-radius filter
+const SMOOTH_W = 192;
+const SMOOTH_H = 108;
 
 /** @typedef {import('../shared/types.js').Region} Region */
 
 /**
  * @param {HTMLCanvasElement} canvas  full-screen canvas in the overlay
  * @param {HTMLVideoElement} video    captured screen
- * @param {{ fadeMs?: number, cssSize?: () => [number, number] }} [opts]  cssSize: canvas size in CSS px (default: window)
+ * @param {{ fadeMs?: number, cssSize?: () => [number, number], flashStyle?: 'glass'|'dim', smoothMs?: number }} [opts]
  */
 export function createEffects(canvas, video, opts = {}) {
   const ctx = /** @type {CanvasRenderingContext2D} */ (canvas.getContext('2d'));
-  const small = document.createElement('canvas');
-  const sctx = /** @type {CanvasRenderingContext2D} */ (small.getContext('2d'));
   let fadeMs = opts.fadeMs ?? 300;
+  let flashStyle = opts.flashStyle ?? 'glass';
+  let smoothMs = opts.smoothMs ?? 900;
   let labelsVisible = true;
   let revealUntil = 0;
   let lastDraw = performance.now();
   /** @type {Map<string, {region: Region, alpha: number, seenAt: number, frozen: HTMLCanvasElement|null}>} */
   const live = new Map();
+
+  // --- time smoothing: Float32 running average (8-bit canvases cannot hold small per-frame steps) ---
+  const grab = new OffscreenCanvas(SMOOTH_W, SMOOTH_H);
+  const gctx = /** @type {OffscreenCanvasRenderingContext2D} */ (grab.getContext('2d', { willReadFrequently: true }));
+  const avg = new Float32Array(SMOOTH_W * SMOOTH_H * 4);
+  const avgImage = new ImageData(SMOOTH_W, SMOOTH_H);
+  const fog = document.createElement('canvas'); // blurred average, drawn scaled up under the glass
+  Object.assign(fog, { width: SMOOTH_W, height: SMOOTH_H });
+  const fctx = /** @type {CanvasRenderingContext2D} */ (fog.getContext('2d'));
+  const avgCanvas = new OffscreenCanvas(SMOOTH_W, SMOOTH_H);
+  const actx = /** @type {OffscreenCanvasRenderingContext2D} */ (avgCanvas.getContext('2d'));
+  let avgReady = false;
+
+  function updateAverage(dt) {
+    if (!video.videoWidth) return;
+    gctx.drawImage(video, 0, 0, SMOOTH_W, SMOOTH_H);
+    const cur = gctx.getImageData(0, 0, SMOOTH_W, SMOOTH_H).data;
+    const k = avgReady ? 1 - Math.exp(-dt / Math.max(16, smoothMs)) : 1;
+    const out = avgImage.data;
+    for (let i = 0; i < avg.length; i++) {
+      avg[i] += (cur[i] - avg[i]) * k;
+      out[i] = avg[i];
+    }
+    avgReady = true;
+    actx.putImageData(avgImage, 0, 0);
+    fctx.clearRect(0, 0, SMOOTH_W, SMOOTH_H);
+    fctx.filter = 'blur(2.5px) saturate(1.35)';
+    // draw slightly enlarged so the blur does not darken the edges
+    fctx.drawImage(avgCanvas, -6, -6, SMOOTH_W + 12, SMOOTH_H + 12);
+    fctx.filter = 'none';
+  }
+
+  // subtle grain: real frosted glass is never perfectly smooth, and grain hides upscaling softness
+  const noise = document.createElement('canvas');
+  Object.assign(noise, { width: 128, height: 128 });
+  {
+    const n = noise.getContext('2d');
+    const img = n.createImageData(128, 128);
+    for (let i = 0; i < img.data.length; i += 4) {
+      const v = Math.random() * 255;
+      img.data.set([v, v, v, 255], i);
+    }
+    n.putImageData(img, 0, 0);
+  }
+  const noisePattern = ctx.createPattern(noise, 'repeat');
 
   function resize() {
     const [cw, ch] = opts.cssSize ? opts.cssSize() : [innerWidth, innerHeight];
@@ -40,25 +90,51 @@ export function createEffects(canvas, video, opts = {}) {
     };
   }
 
-  function drawBlur(rect, strength, alpha) {
-    const { s, d } = px(rect);
-    const k = SMALL * (1.2 - strength); // stronger blur -> smaller copy
-    small.width = Math.max(2, Math.round(d[2] * k));
-    small.height = Math.max(2, Math.round(d[3] * k));
-    sctx.drawImage(video, ...s, 0, 0, small.width, small.height);
+  /** one frosted glass panel over canvas-pixel rect d */
+  function paintGlass(d, alpha, { radius, contrast = 1 }) {
+    const [x, y, w, h] = d;
+    if (w < 2 || h < 2) return;
+    const dpr = devicePixelRatio;
+    const r = Math.min(radius * dpr, w / 2, h / 2);
     ctx.save();
     ctx.globalAlpha = alpha;
+
+    // soft shadow lifts the panel off the page
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.22)';
+    ctx.shadowBlur = 30 * dpr;
+    ctx.shadowOffsetY = 8 * dpr;
+    ctx.fillStyle = 'rgba(128, 128, 128, 1)';
     ctx.beginPath();
-    ctx.rect(...d);
+    ctx.roundRect(x, y, w, h, r);
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+
     ctx.clip();
+    // the fogged, time-smoothed screen behind the glass, aligned with the real screen
     ctx.imageSmoothingQuality = 'high';
-    ctx.filter = `blur(${Math.round(4 + 12 * strength)}px)`;
-    // draw a little larger than the clip so the blurred edges are not transparent
-    const m = 24;
-    ctx.drawImage(small, d[0] - m, d[1] - m, d[2] + 2 * m, d[3] + 2 * m);
+    if (contrast !== 1) ctx.filter = `contrast(${contrast})`;
+    ctx.drawImage(fog, 0, 0, SMOOTH_W, SMOOTH_H, 0, 0, canvas.width, canvas.height);
     ctx.filter = 'none';
-    ctx.fillStyle = `rgba(30, 34, 40, ${0.25 * strength})`;
-    ctx.fillRect(...d);
+
+    // milky tint with a gentle top-left sheen
+    const sheen = ctx.createLinearGradient(x, y, x + w, y + h);
+    sheen.addColorStop(0, 'rgba(255, 255, 255, 0.30)');
+    sheen.addColorStop(0.5, 'rgba(255, 255, 255, 0.16)');
+    sheen.addColorStop(1, 'rgba(255, 255, 255, 0.10)');
+    ctx.fillStyle = sheen;
+    ctx.fillRect(x, y, w, h);
+
+    ctx.globalAlpha = alpha * 0.045;
+    ctx.fillStyle = noisePattern;
+    ctx.fillRect(x, y, w, h);
+
+    // hairline edge highlight, like light catching the glass
+    ctx.globalAlpha = alpha;
+    ctx.lineWidth = 1 * dpr;
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
+    ctx.beginPath();
+    ctx.roundRect(x + 0.5 * dpr, y + 0.5 * dpr, w - dpr, h - dpr, r);
+    ctx.stroke();
     ctx.restore();
   }
 
@@ -73,6 +149,21 @@ export function createEffects(canvas, video, opts = {}) {
     }
     ctx.fillStyle = `rgba(12, 14, 18, ${a})`;
     ctx.fill('nonzero');
+  }
+
+  /** flashing regions merge into one glass panel over their bounding box */
+  function drawFlashGlass(entries) {
+    if (!entries.length) return;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, a = 0;
+    for (const e of entries) {
+      const [x, y, w, h] = px(e.region.rect).d;
+      x0 = Math.min(x0, x); y0 = Math.min(y0, y);
+      x1 = Math.max(x1, x + w); y1 = Math.max(y1, y + h);
+      a = Math.max(a, e.alpha);
+    }
+    // stronger smoothing + lower contrast for flashes: the whole point is to calm them
+    paintGlass([x0, y0, x1 - x0, y1 - y0], a, { radius: 22, contrast: 0.7 });
+    return { rect: { x: x0 / canvas.width, y: y0 / canvas.height, w: (x1 - x0) / canvas.width, h: (y1 - y0) / canvas.height }, alpha: a };
   }
 
   function drawFreeze(entry, alpha) {
@@ -95,31 +186,42 @@ export function createEffects(canvas, video, opts = {}) {
     const dpr = devicePixelRatio;
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.font = `${13 * dpr}px system-ui, -apple-system, "Segoe UI", sans-serif`;
-    const padX = 10 * dpr, h = 26 * dpr;
-    const w = Math.min(d[2] - 16 * dpr, ctx.measureText(text).width + 2 * padX);
-    if (w < 40 * dpr || d[3] < h + 16 * dpr) return ctx.restore();
-    const x = d[0] + 8 * dpr, y = d[1] + 8 * dpr;
-    ctx.fillStyle = 'rgba(245, 247, 250, 0.72)';
+    ctx.font = `500 ${13 * dpr}px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif`;
+    const padX = 12 * dpr, h = 28 * dpr, dot = 7 * dpr;
+    const w = Math.min(d[2] - 24 * dpr, ctx.measureText(text).width + 2 * padX + dot + 8 * dpr);
+    if (w < 60 * dpr || d[3] < h + 24 * dpr) return ctx.restore();
+    const x = d[0] + 14 * dpr, y = d[1] + 14 * dpr;
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.18)';
+    ctx.shadowBlur = 12 * dpr;
+    ctx.fillStyle = 'rgba(250, 250, 252, 0.78)';
     ctx.beginPath();
     ctx.roundRect(x, y, w, h, h / 2);
     ctx.fill();
-    ctx.fillStyle = 'rgba(20, 24, 30, 0.9)';
+    ctx.shadowColor = 'transparent';
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    ctx.lineWidth = dpr;
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(47, 111, 100, 0.95)';
+    ctx.beginPath();
+    ctx.arc(x + padX + dot / 2, y + h / 2, dot / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(28, 32, 38, 0.92)';
     ctx.textBaseline = 'middle';
-    ctx.fillText(text, x + padX, y + h / 2, w - 2 * padX);
+    ctx.fillText(text, x + padX + dot + 8 * dpr, y + h / 2 + 0.5 * dpr, w - 2 * padX - dot - 8 * dpr);
     ctx.restore();
   }
 
-  /** draw one frame; call on every captured frame or animation frame */
+  /** draw one frame; call on every animation frame */
   function draw(nowMs = performance.now()) {
     resize();
     const dt = Math.max(0, nowMs - lastDraw);
     lastDraw = nowMs;
+    updateAverage(dt); // keeps running so the average is already settled when protection starts
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!video.videoWidth) return;
     const step = fadeMs > 0 ? dt / fadeMs : 1;
     const revealing = nowMs < revealUntil;
-    const dims = [];
-    const labels = [];
+    const dims = [], glass = [], labels = [];
     for (const [id, e] of live) {
       const wanted = !revealing && nowMs - e.seenAt <= HOLD_MS;
       e.alpha = Math.max(0, Math.min(1, e.alpha + (wanted ? step : -step)));
@@ -127,21 +229,28 @@ export function createEffects(canvas, video, opts = {}) {
         if (!wanted && nowMs - e.seenAt > HOLD_MS) live.delete(id);
         continue;
       }
-      if (!video.videoWidth) continue;
-      const { rect, effect, strength } = e.region;
-      if (effect === 'blur') drawBlur(rect, strength, e.alpha);
-      else if (effect === 'freeze') drawFreeze(e, e.alpha);
-      else dims.push(e);
-      if (labelsVisible && e.region.reason) labels.push(e);
+      const { effect } = e.region;
+      if (effect === 'blur') {
+        const [x, y, w, h] = px(e.region.rect).d;
+        const inset = 4 * devicePixelRatio; // neighbouring tiles read as separate frosted panes
+        paintGlass([x + inset, y + inset, w - 2 * inset, h - 2 * inset], e.alpha, { radius: 16 });
+        if (labelsVisible && e.region.reason) labels.push({ rect: e.region.rect, reason: e.region.reason, alpha: e.alpha });
+      } else if (effect === 'freeze') drawFreeze(e, e.alpha);
+      else (flashStyle === 'glass' ? glass : dims).push(e);
     }
     drawDims(dims);
-    // one label per distinct reason, on its top-left region, so a dimmed area is not covered in labels
+    const panel = drawFlashGlass(glass);
+    if (labelsVisible) {
+      if (panel) labels.push({ rect: panel.rect, reason: glass[0].region.reason, alpha: panel.alpha });
+      else if (dims.length) labels.push({ rect: dims[0].region.rect, reason: dims[0].region.reason, alpha: dims[0].alpha });
+    }
+    // one label per distinct reason, top-left first, so a protected area is not covered in labels
     const seen = new Set();
-    labels.sort((p, q) => p.region.rect.y - q.region.rect.y || p.region.rect.x - q.region.rect.x);
-    for (const e of labels) {
-      if (seen.has(e.region.reason)) continue;
-      seen.add(e.region.reason);
-      drawLabel(e.region.rect, e.region.reason, e.alpha);
+    labels.sort((p, q) => p.rect.y - q.rect.y || p.rect.x - q.rect.x);
+    for (const l of labels) {
+      if (!l.reason || seen.has(l.reason)) continue;
+      seen.add(l.reason);
+      drawLabel(l.rect, l.reason, l.alpha);
     }
   }
 
@@ -164,8 +273,11 @@ export function createEffects(canvas, video, opts = {}) {
     },
     // additions beyond the contract, used by overlay.js
     draw,
-    setFadeMs(ms) {
-      fadeMs = ms;
+    /** @param {{ fadeMs?: number, flashStyle?: 'glass'|'dim', smoothMs?: number }} s */
+    setStyle(s) {
+      if (s.fadeMs != null) fadeMs = s.fadeMs;
+      if (s.flashStyle) flashStyle = s.flashStyle;
+      if (s.smoothMs != null) smoothMs = s.smoothMs;
     },
     clear() {
       live.clear();

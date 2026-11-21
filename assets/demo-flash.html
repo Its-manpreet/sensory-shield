@@ -45,6 +45,7 @@
       dt { color: var(--muted); font-size: 13px; }
       dd { margin: 2px 0 0; font-size: 20px; font-variant-numeric: tabular-nums; }
       .foot { color: var(--muted); font-size: 14px; margin-top: 20px; }
+      [hidden] { display: none !important; }
       @media (max-width: 560px) { dl { grid-template-columns: 1fr 1fr; } }
     </style>
   </head>
@@ -77,11 +78,15 @@
 
         <div class="row">
           <label class="switch"><input type="checkbox" id="protect" checked /> Protection on</label>
+          <div class="controls" role="group" aria-label="Softening style" style="margin:0">
+            <button data-style="glass" aria-pressed="true">Glass fog</button>
+            <button data-style="dim" aria-pressed="false">Dim</button>
+          </div>
           <span class="status" id="status" role="status" aria-live="polite" data-state="idle">Idle</span>
         </div>
 
         <dl>
-          <div><dt>Time to first dim</dt><dd id="m-detect">–</dd></div>
+          <div><dt>Time to protect</dt><dd id="m-detect">–</dd></div>
           <div><dt>Detector time per frame</dt><dd id="m-push">–</dd></div>
           <div><dt>Frames checked</dt><dd id="m-frames">0</dd></div>
         </dl>
@@ -102,6 +107,8 @@
       const video = $('video'), canvas = $('fx'), stage = canvas.parentElement;
       const effects = createEffects(canvas, video, {
         fadeMs: profile.response.fadeMs,
+        flashStyle: 'glass',
+        smoothMs: 900,
         cssSize: () => [stage.clientWidth, stage.clientHeight],
       });
       const small = new OffscreenCanvas(64, 36).getContext('2d', { willReadFrequently: true });
@@ -118,6 +125,12 @@
         b.addEventListener('click', () => play(b));
       }
       $('stop').addEventListener('click', stop);
+      for (const b of document.querySelectorAll('[data-style]')) {
+        b.addEventListener('click', () => {
+          effects.setStyle({ flashStyle: b.dataset.style });
+          for (const o of document.querySelectorAll('[data-style]')) o.setAttribute('aria-pressed', String(o === b));
+        });
+      }
       $('protect').addEventListener('change', (e) => { if (!e.target.checked) effects.clear(); });
 
       async function play(button) {
@@ -167,8 +180,8 @@
         if (events.some((e) => e.active)) {
           if (firstDim === null) firstDim = now - startedAt;
           const red = events.some((e) => e.kind === 'red');
-          setStatus('flash', red ? 'Red flashing detected: dimmed' : 'Flashing detected: dimmed');
-        } else if (events.length) setStatus('hold', 'Holding the dim until the flashing has clearly stopped');
+          setStatus('flash', red ? 'Red flashing detected: softened' : 'Flashing detected: softened');
+        } else if (events.length) setStatus('hold', 'Holding until the flashing has clearly stopped');
         else setStatus('watch', 'Watching: no flashing');
 
         if ($('protect').checked) effects.setRegions(toRegions(events, [], profile), now);
