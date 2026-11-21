@@ -7,6 +7,7 @@ Read first: `CLAUDE.md` (brief and rules), `START-HERE.md` (team plan), `docs/IN
 ## Setup
 ```sh
 npm install
+npm run vision:setup   # one time: llama.cpp build for this OS + LFM3-VL-2B model (~1.3 GB) into vendor/ and models/
 npm test          # Node unit tests (node --test test/)
 npm start         # run the app (tray icon "Shield"; overlay is invisible until something is flagged)
 npm run selftest  # starts the app, prints renderer logs, quits after 6 s
@@ -35,3 +36,17 @@ Every stub already matches `docs/INTERFACES.md`, so you can replace one module w
 
 ### macOS: run as its own app (recommended)
 `npm run app` launches Electron as a standalone app, so macOS asks for Screen Recording permission for **Electron** itself (not your terminal). Grant it in System Settings → Privacy & Security → Screen & System Audio Recording, then press **Relaunch** in the Sensory Shield window.
+
+## Content blocklist (vision model)
+Type any words in Settings → Content ("spiders", "gore", "pornography", "clowns", "cartoon"). An on-device
+vision-language model (LFM3-VL-2B) runs in a bundled llama.cpp server on 127.0.0.1 with a per-launch key;
+screenshots stay in memory and never leave the machine. It loads only when content protection has a trigger.
+Accuracy check on your own screenshots: `node test/vision/eval.js <folder>` (see the file for naming).
+
+## Packaging
+```sh
+npm run dist:dir   # unpacked app in dist/ (fast check)
+npm run dist       # installer: .dmg on macOS, NSIS .exe on Windows, AppImage on Linux
+```
+Build on each target OS: `vision:setup` fetches that OS's llama.cpp build, and electron-builder copies it plus
+the model into the app's resources. The app is unsigned (fine for the demo; macOS: right-click → Open the first time).

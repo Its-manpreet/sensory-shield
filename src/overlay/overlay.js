@@ -125,6 +125,7 @@ async function checkContent(now) {
       const t0 = performance.now();
       const bitmap = await createImageBitmap(video);
       lastTiles = await content.scoreTiles(bitmap, changed);
+      if (debug) log(`content check ${Math.round(performance.now() - t0)} ms: ${lastTiles.map((t) => t.label).join(', ') || 'nothing found'}`);
       bitmap.close();
       stats.modelMs += performance.now() - t0;
       stats.modelRuns++;
@@ -174,7 +175,6 @@ if (wantsContent(profile)) loadContent();
 
 if (selftest) {
   log(`window ${screenX},${screenY} ${innerWidth}x${innerHeight} vs screen ${screen.width}x${screen.height} @${devicePixelRatio}x`);
-  const t = await import('@huggingface/transformers');
-  log(`SELFTEST overlay ok: profile=${settings.activeProfileId} transformers=${t.env.version}`);
+  log(`SELFTEST overlay ok: profile=${settings.activeProfileId}`);
 }
 if (params.has('spike')) (await import('./spike.js')).runSpike(video, canvas, log);

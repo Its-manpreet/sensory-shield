@@ -21,3 +21,4 @@ out/
 logs/
 # llama.cpp binaries, fetched per platform by npm run vision:setup
 vendor/
+dist/

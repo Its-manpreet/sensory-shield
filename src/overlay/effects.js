@@ -95,7 +95,7 @@ export function createEffects(canvas, video, opts = {}) {
   }
 
   /** one frosted glass panel over canvas-pixel rect d */
-  function paintGlass(d, alpha, { radius, contrast = 1 }) {
+  function paintGlass(d, alpha, { radius, contrast = 1, blurPx = 0, tint = 0 }) {
     const [x, y, w, h] = d;
     if (w < 2 || h < 2) return;
     const dpr = devicePixelRatio;
@@ -116,15 +116,18 @@ export function createEffects(canvas, video, opts = {}) {
     ctx.clip();
     // the fogged, time-smoothed screen behind the glass, aligned with the real screen
     ctx.imageSmoothingQuality = 'high';
-    if (contrast !== 1) ctx.filter = `contrast(${contrast})`;
+    const filters = [];
+    if (contrast !== 1) filters.push(`contrast(${contrast})`);
+    if (blurPx) filters.push(`blur(${Math.round(blurPx * dpr)}px)`);
+    if (filters.length) ctx.filter = filters.join(' ');
     ctx.drawImage(fog, 0, 0, SMOOTH_W, SMOOTH_H, 0, 0, canvas.width, canvas.height);
     ctx.filter = 'none';
 
     // milky tint with a gentle top-left sheen
     const sheen = ctx.createLinearGradient(x, y, x + w, y + h);
-    sheen.addColorStop(0, 'rgba(255, 255, 255, 0.30)');
-    sheen.addColorStop(0.5, 'rgba(255, 255, 255, 0.16)');
-    sheen.addColorStop(1, 'rgba(255, 255, 255, 0.10)');
+    sheen.addColorStop(0, `rgba(255, 255, 255, ${0.3 + tint})`);
+    sheen.addColorStop(0.5, `rgba(255, 255, 255, ${0.16 + tint})`);
+    sheen.addColorStop(1, `rgba(255, 255, 255, ${0.1 + tint})`);
     ctx.fillStyle = sheen;
     ctx.fillRect(x, y, w, h);
 
@@ -238,7 +241,9 @@ export function createEffects(canvas, video, opts = {}) {
       if (effect === 'blur') {
         const [x, y, w, h] = px(e.region.rect).d;
         const inset = 4 * devicePixelRatio; // neighbouring tiles read as separate frosted panes
-        paintGlass([x + inset, y + inset, w - 2 * inset, h - 2 * inset], e.alpha, { radius: 16 });
+        // content the user asked to hide: much heavier than the flash glass, so shapes are not recognisable
+        const k = e.region.strength;
+        paintGlass([x + inset, y + inset, w - 2 * inset, h - 2 * inset], e.alpha, { radius: 16, blurPx: 14 + 30 * k, tint: 0.12 + 0.1 * k });
         if (labelsVisible && e.region.reason) labels.push({ rect: e.region.rect, reason: e.region.reason, alpha: e.alpha });
       } else if (effect === 'freeze') drawFreeze(e, e.alpha);
       else (flashStyle === 'glass' ? glass : dims).push(e);

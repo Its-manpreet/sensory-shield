@@ -1,0 +1,37 @@
+<!doctype html>
+<!-- OWNER: Agent A. Visual check of a content blur: a fake web page (drawn on a canvas, streamed into a
+     <video> like the real capture) with one region blurred by the real effects renderer + regions mapping.
+     Run: npm run demo, open http://localhost:8765/test/browser/content-blur-check.html -->
+<meta charset="utf-8" />
+<title>Content blur check</title>
+<style>body { margin: 0; } .stage { position: relative; width: 1000px; height: 650px; } .stage > * { position: absolute; inset: 0; width: 100%; height: 100%; }</style>
+<div class="stage"><video id="v" muted playsinline></video><canvas id="fx"></canvas></div>
+<script type="module">
+  import { createEffects } from '../../src/overlay/effects.js';
+  import { toRegions } from '../../src/overlay/regions.js';
+  import { DEFAULT_PROFILES } from '../../src/shared/profiles.js';
+  const page = document.createElement('canvas');
+  Object.assign(page, { width: 2000, height: 1300 });
+  const p = page.getContext('2d');
+  p.fillStyle = '#f4f4f6'; p.fillRect(0, 0, 2000, 1300);
+  p.fillStyle = '#2b2d31'; p.fillRect(0, 0, 2000, 90);
+  p.fillStyle = '#1d1d1f'; p.font = '600 52px -apple-system, sans-serif'; p.fillText('Weekend photo dump', 150, 230);
+  p.fillStyle = '#6e6e73'; p.font = '30px -apple-system, sans-serif'; p.fillText('A few shots from the trip. Scroll for more.', 150, 290);
+  const photo = (x, y, hue) => {
+    const g = p.createLinearGradient(x, y, x, y + 520);
+    g.addColorStop(0, `hsl(${hue} 70% 70%)`); g.addColorStop(1, `hsl(${hue + 40} 60% 30%)`);
+    p.fillStyle = g; p.fillRect(x, y, 760, 520);
+    for (let k = 0; k < 7; k++) { p.fillStyle = `hsl(${hue + k * 50} 80% 50% / 0.7)`; p.beginPath(); p.arc(x + 100 + k * 90, y + 150 + (k % 3) * 120, 40 + k * 8, 0, 7); p.fill(); }
+  };
+  photo(150, 400, 200); photo(1090, 400, 20);
+  const video = document.getElementById('v');
+  video.srcObject = page.captureStream(30);
+  await video.play();
+  const stage = document.querySelector('.stage');
+  const fx = createEffects(document.getElementById('fx'), video, { cssSize: () => [stage.clientWidth, stage.clientHeight] });
+  // the right-hand photo "detected" as a trigger (box padded like the vision pipeline does)
+  const tile = { id: 'content-1', rect: { x: 1090 / 2000 - 0.03, y: 400 / 1300 - 0.03, w: 760 / 2000 + 0.06, h: 520 / 1300 + 0.06 }, triggerId: 'spiders', label: 'spiders', score: 1 };
+  const profile = DEFAULT_PROFILES['graphic-sensitive'];
+  (function loop(now) { requestAnimationFrame(loop); fx.setRegions(toRegions([], [tile], profile), now); fx.draw(now); })(performance.now());
+  setTimeout(() => console.log('BLURCHECK ready'), 1500);
+</script>

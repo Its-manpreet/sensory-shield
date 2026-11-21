@@ -200,6 +200,8 @@ app.whenReady().then(() => {
   globalShortcut.register(HOTKEYS.settings, openSettings);
   openSettings(); // the window is the app's face; closing it leaves the shield running in the tray
   if (SELFTEST) {
+    // SHIELD_VISION_CHECK=1: also start the bundled vision model and report (packaging check)
+    if (process.env.SHIELD_VISION_CHECK === '1') startVision().then((r) => console.log(`SELFTEST vision ${JSON.stringify(r)}`));
     setTimeout(() => app.quit(), SPIKE ? 9000 : 6000);
   }
 });

@@ -11,21 +11,68 @@
     "selftest": "SHIELD_SELFTEST=1 electron .",
     "clips": "sh test/make-clips.sh",
     "spike": "SHIELD_SELFTEST=1 SHIELD_SPIKE=1 electron .",
-    "models": "node test/download-models.js",
     "demo": "node test/serve.js",
     "app": "open -n -a \"$PWD/node_modules/electron/dist/Electron.app\" --args \"$PWD\"",
     "app:debug": "mkdir -p logs && open -n -a \"$PWD/node_modules/electron/dist/Electron.app\" --env SHIELD_DEBUG=1 --stdout \"$PWD/logs/debug.log\" --stderr \"$PWD/logs/debug.log\" --args \"$PWD\"",
-    "vision:setup": "node scripts/vision-setup.js"
+    "vision:setup": "node scripts/vision-setup.js",
+    "dist": "npm run vision:setup && electron-builder",
+    "dist:dir": "npm run vision:setup && electron-builder --dir"
   },
   "license": "UNLICENSED",
-  "dependencies": {
-    "@huggingface/transformers": "^4.3.2"
-  },
   "devDependencies": {
-    "electron": "^45.4.1"
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.0"
   },
   "allowScripts": {
-    "onnxruntime-node": false,
-    "protobufjs": false
+    "electron-winstaller": false
+  },
+  "productName": "Sensory Shield",
+  "build": {
+    "appId": "app.sensoryshield",
+    "productName": "Sensory Shield",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!**/*.md"
+    ],
+    "extraResources": [
+      {
+        "from": "vendor/llama.cpp/${platform}-${arch}",
+        "to": "llama"
+      },
+      {
+        "from": "models/lfm3-vl",
+        "to": "models/lfm3-vl",
+        "filter": [
+          "*.gguf"
+        ]
+      }
+    ],
+    "asar": true,
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.utilities",
+      "identity": null,
+      "hardenedRuntime": false
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    }
   }
 }
