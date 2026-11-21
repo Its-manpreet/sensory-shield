@@ -32,3 +32,6 @@ Every stub already matches `docs/INTERFACES.md`, so you can replace one module w
 
 ## Branches
 `main` always runs. Work on `a/shell`, `b/flash`, `c/content`, `d/ui`; rebase on `main`, open a PR at each milestone. Tag the last full working build `demo-ok`.
+
+### macOS: run as its own app (recommended)
+`npm run app` launches Electron as a standalone app, so macOS asks for Screen Recording permission for **Electron** itself (not your terminal). Grant it in System Settings → Privacy & Security → Screen & System Audio Recording, then press **Relaunch** in the Sensory Shield window.
