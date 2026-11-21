@@ -88,7 +88,8 @@ function onFrame(now) {
   stats.engineMs += performance.now() - t0;
   lastRegions = toRegions(flashEvents, profile, sens);
   lastFrameAt = now;
-  effects.setRegions(lastRegions, now);
+  // new protection is drawn right here, in the frame that detected it, instead of on the next display frame
+  if (effects.setRegions(lastRegions, now)) effects.draw(performance.now());
 }
 
 // Effects redraw on every display frame so fades stay smooth even when the capture is idle.
@@ -105,31 +106,34 @@ let lastGainDb = 0;
 const loudnessConfig = (s) => ({ limiter: !!s.sensory?.loudLimiter, leveling: !!s.sensory?.loudLeveling, softStart: !!s.sensory?.softStart });
 let loudness = createLoudnessGuard(loudnessConfig(settings));
 let loudnessKey = JSON.stringify(loudnessConfig(settings));
-function startSound(stream) {
-  const meter = createSoundMeter(stream);
+async function startSound(stream) {
+  let meter = null;
+  try {
+    meter = await createSoundMeter(stream);
+  } catch (err) {
+    log(`sound meter unavailable: ${err?.message ?? err}`);
+  }
   if (!meter) return void (soundState = 'unavailable');
   soundState = 'on';
   let lastSent = 0;
-  setInterval(() => {
+  meter.onLevel((levelNow, now) => {
     const key = JSON.stringify(loudnessConfig(settings));
     if (key !== loudnessKey) (loudness = createLoudnessGuard(loudnessConfig(settings))), (loudnessKey = key);
     const anyOn = settings.enabled && (settings.sensory?.loudLimiter || settings.sensory?.loudLeveling || settings.sensory?.softStart);
-    const now = performance.now();
-    const levelNow = meter.levelDb();
     const { gainDb } = anyOn ? loudness.push({ levelDb: levelNow, tMs: now }) : { gainDb: 0 };
     // send on a real change (0.5 dB), and at least twice a second while turned down
     if (Math.abs(gainDb - lastGainDb) >= 0.5 || (gainDb < 0 && now - lastSent > 500) || (gainDb === 0 && lastGainDb !== 0)) {
       window.shield?.sendAudioGain(gainDb);
-      if (selftest || debug) log(`sound: level ${levelNow.toFixed(0)} dBFS -> volume ${gainDb < 0 ? `down ${(-gainDb).toFixed(1)} dB` : 'back to yours'}`);
+      if ((selftest || debug) && Math.abs(gainDb - lastGainDb) >= 0.5) log(`sound: level ${levelNow.toFixed(0)} dBFS -> volume ${gainDb < 0 ? `down ${(-gainDb).toFixed(1)} dB` : 'back to yours'}`);
       lastSent = now;
       lastGainDb = gainDb;
     }
-  }, 50);
+  });
 }
 
 try {
   const stream = await startCapture(video);
-  startSound(stream);
+  startSound(stream); // async: the audio worklet loads in the background
   captureState = 'ok';
   log(`capture started ${video.videoWidth}x${video.videoHeight}, window ${innerWidth}x${innerHeight} @${devicePixelRatio}x`);
   video.requestVideoFrameCallback(onFrame);

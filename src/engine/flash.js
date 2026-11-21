@@ -40,6 +40,14 @@ const EARLY_TOLERANCE = 1.1; // allow 10% timing jitter from frame capture
 // Early trigger also needs the flash to REPEAT: the two bright levels (and the two dark levels) left
 // behind must agree within this share of the swing. Scrolling past random content does not repeat.
 const EARLY_REPEAT = 0.3;
+// Quick trigger: ONE full flash (a big swing and back) inside QUICK_GAP_MS is already enough when the swing is
+// large. A single swing alone looks exactly like a scene cut, so the turn back is the earliest real evidence:
+// ~85 ms into a 6 Hz flash, ~170 ms into 3 Hz. Area and motion rules still apply.
+const QUICK_SWING = 0.25; // linear luminance: e.g. dark grey <-> light grey or more
+const QUICK_GAP_MS = 190; // the swing back must follow within this: a 3 Hz flash turns back after 167 ms
+const QUICK_MOTION_QUIET_MS = 500; // and no sign of motion in that block for this long
+const QUICK_RETURN = 0.3; // and land back near where it started (within 30% of the swing): a real flash
+// goes dark -> bright -> dark; scrolling content passing a cell lands somewhere new
 // A protected region that shows no change at all for this long (a paused video, a still frame) cannot
 // be flashing: release it right away instead of waiting out the window and holdMs.
 // Adaptive: 2.5x the longest recent gap between changes in that region, between STILL_MIN_MS and STILL_MS.
@@ -146,6 +154,19 @@ function createTracker(n, delta, darkMax) {
       for (let b = 1; b + 2 <= k; b++) if (Math.abs(levels[at(b)] - levels[at(b + 2)]) > swing * EARLY_REPEAT) return false;
       return true;
     },
+    /** Quick trigger: the last two transitions form one big, fast flash, and it is recent. */
+    quickFlash(i, t) {
+      const base = i * RING;
+      const at = (back) => base + ((head[i] + RING - back) % RING);
+      const newest = times[at(1)], older = times[at(2)];
+      if (older === -Infinity || newest - older > QUICK_GAP_MS || t - newest > QUICK_GAP_MS) return false;
+      // levels[at(2)] = where it started (left by the swing away), levels[at(1)] = the peak (left by the swing
+      // back), ext = where it is now: a big swing out and a return close to the start
+      const start = levels[at(2)], peak = levels[at(1)], now = ext[i];
+      const swing = Math.abs(peak - start);
+      return swing >= QUICK_SWING * this.scale && Math.abs(now - start) <= swing * QUICK_RETURN;
+    },
+    scale: 1, // the red/colour trackers use other units
     /** cheap pre-check: any transition inside the window? */
     recent(i, t) {
       const last = times[i * RING + ((head[i] + RING - 1) % RING)];
@@ -172,6 +193,8 @@ export function createFlashDetector(config = {}) {
   const lum = createTracker(n, LUM_DELTA, LUM_DARK_MAX);
   const red = createTracker(n, RED_DELTA, Infinity);
   const chroma = createTracker(n, CHROMA_DELTA, Infinity);
+  red.scale = 320; // quick-flash swing in each tracker's units: 0.25 luminance ~ 80 red value ~ 0.4 colour
+  chroma.scale = 1.6;
   const nRegions = regionsX * regionsY;
   const cellRegion = new Uint16Array(n);
   for (let y = 0; y < gridH; y++) {
@@ -188,10 +211,14 @@ export function createFlashDetector(config = {}) {
   // Slow scrolling (under ~half a cell per frame, e.g. 300 px/s) is too small to match frame to frame, yet a
   // list of white cards on a dark page still makes every cell blink. Blocks no 1-frame shift explains are
   // also matched against the frame SLOW_STRIDE frames back, where the same motion is a whole cell or more.
-  const SLOW_STRIDE = 3;
-  const history = Array.from({ length: SLOW_STRIDE }, () => new Float32Array(n)); // ring of older frames
+  // time-based, so it works the same at 30 and 60 fps: compare with the newest kept frame >= SLOW_GAP_MS old
+  const SLOW_GAP_MS = 90;
+  const HISTORY = 8; // frames kept (covers ~130 ms at 60 fps)
+  const history = Array.from({ length: HISTORY }, () => new Float32Array(n)); // ring of older frames
+  const historyT = new Float64Array(HISTORY).fill(-Infinity);
   let historyPos = 0, historyFill = 0;
   let ref = prev; // the frame blockDiff / blockResidual compare against
+  let prevT = -Infinity;
   const lastSlowT = new Float64Array(Math.max(1, Math.round(gridW / BLOCK_W)) * Math.max(1, Math.round(gridH / BLOCK_H))).fill(-Infinity);
   let havePrev = false;
   const blocksX = Math.max(1, Math.round(gridW / BLOCK_W));
@@ -199,6 +226,9 @@ export function createFlashDetector(config = {}) {
   const movingUntil = new Float64Array(blocksX * blocksY);
   const lastMatchT = new Float64Array(blocksX * blocksY).fill(-Infinity);
   const lastDx = new Int8Array(blocksX * blocksY), lastDy = new Int8Array(blocksX * blocksY);
+  // last time any shift explained a block's change (confirmed or not): the quick trigger stays out of blocks
+  // with any hint of motion, since two swings are easy to get from scrolling repetitive content
+  const motionSeen = new Float64Array(blocksX * blocksY).fill(-Infinity);
   const dbg = { pushes: 0, maxFlashingFraction: 0, maxFlashes: 0, movingBlocks: 0 };
   const cellBlock = new Uint16Array(n);
   for (let y = 0; y < gridH; y++) {
@@ -259,8 +289,15 @@ export function createFlashDetector(config = {}) {
    * confirmed by a second slow match within MOTION_CONFIRM_MS. A flash at any rate fails the brightness test.
    */
   function slowMotion(b, x0, y0, x1, y1, grad, t) {
-    if (historyFill < SLOW_STRIDE) return false;
-    ref = history[historyPos]; // the oldest kept frame: SLOW_STRIDE frames back
+    // newest kept frame that is at least SLOW_GAP_MS old (else the oldest we have)
+    let pick = -1;
+    for (let k = 1; k <= historyFill; k++) {
+      const j = (historyPos - k + HISTORY) % HISTORY;
+      pick = j;
+      if (t - historyT[j] >= SLOW_GAP_MS) break;
+    }
+    if (pick < 0 || t - historyT[pick] < SLOW_GAP_MS * 0.6) return false;
+    ref = history[pick];
     try {
       const d0 = blockDiff(x0, y0, x1, y1, 0, 0, Infinity);
       if (d0 < MOTION_MIN_CHANGE) return false;
@@ -275,6 +312,7 @@ export function createFlashDetector(config = {}) {
       const explainable = d0 <= (Math.max(Math.abs(bdx), Math.abs(bdy)) + 1) * grad * MOTION_GRADIENT_SLACK;
       if (!(best <= d0 * MOTION_RATIO && explainable)) return false;
       if (Math.abs(blockResidual(x0, y0, x1, y1, bdx, bdy)) >= MOTION_MAX_RESIDUAL) return false;
+      motionSeen[b] = t;
       const confirmed = t - lastSlowT[b] <= MOTION_CONFIRM_MS;
       lastSlowT[b] = t;
       return confirmed;
@@ -318,6 +356,7 @@ export function createFlashDetector(config = {}) {
           continue;
         }
         if (Math.abs(blockResidual(x0, y0, x1, y1, bdx, bdy)) >= MOTION_MAX_RESIDUAL) continue; // brightness changed
+        motionSeen[b] = t;
         // confirmed: a recent match whose shift is close, or still explains this frame (periodic text has
         // many equally good shifts, and a flick changes speed quickly)
         const confirmed =
@@ -403,20 +442,21 @@ export function createFlashDetector(config = {}) {
       }
 
       if (still[cellRegion[i]]) continue; // nothing in this region moved for STILL_MS: not flashing
+      const quickOk = t - motionSeen[cellBlock[i]] > QUICK_MOTION_QUIET_MS;
       let f = 0;
       if (lum.recent(i, t)) {
         f = lum.flashes(i, t);
-        if (f < maxFlashesPerSec && lum.fastRate(i, t, EARLY_TRANSITIONS, maxFlashesPerSec)) f = maxFlashesPerSec;
+        if (f < maxFlashesPerSec && (lum.fastRate(i, t, EARLY_TRANSITIONS, maxFlashesPerSec) || (quickOk && lum.quickFlash(i, t)))) f = maxFlashesPerSec;
       }
       let isRed = false;
       if (detectRed && red.recent(i, t)) {
         let fr = red.flashes(i, t);
-        if (fr < maxFlashesPerSec && red.fastRate(i, t, EARLY_TRANSITIONS, maxFlashesPerSec)) fr = maxFlashesPerSec;
+        if (fr < maxFlashesPerSec && (red.fastRate(i, t, EARLY_TRANSITIONS, maxFlashesPerSec) || (quickOk && red.quickFlash(i, t)))) fr = maxFlashesPerSec;
         if (fr >= maxFlashesPerSec && fr >= f) (f = fr), (isRed = true);
       }
       if (colorFlicker && chroma.recent(i, t)) {
         let fc = chroma.flashes(i, t);
-        if (fc < maxFlashesPerSec && chroma.fastRate(i, t, EARLY_TRANSITIONS, maxFlashesPerSec)) fc = maxFlashesPerSec;
+        if (fc < maxFlashesPerSec && (chroma.fastRate(i, t, EARLY_TRANSITIONS, maxFlashesPerSec) || (quickOk && chroma.quickFlash(i, t)))) fc = maxFlashesPerSec;
         if (fc >= maxFlashesPerSec && fc >= f) (f = fc), (isRed = true);
       }
       if (f < maxFlashesPerSec) continue;
@@ -437,10 +477,12 @@ export function createFlashDetector(config = {}) {
     // keep the frame from SLOW_STRIDE frames back: overwrite the oldest slot with the frame that is now `prev`
     if (havePrev) {
       history[historyPos].set(prev);
-      historyPos = (historyPos + 1) % SLOW_STRIDE;
-      historyFill = Math.min(SLOW_STRIDE, historyFill + 1);
+      historyT[historyPos] = prevT;
+      historyPos = (historyPos + 1) % HISTORY;
+      historyFill = Math.min(HISTORY, historyFill + 1);
     }
     prev.set(cur);
+    prevT = t;
     havePrev = true;
     dbg.pushes++;
     dbg.maxFlashingFraction = Math.max(dbg.maxFlashingFraction, flashingCells / n);
@@ -493,7 +535,9 @@ export function createFlashDetector(config = {}) {
       chroma.reset();
       havePrev = false;
       historyFill = 0;
+      historyT.fill(-Infinity);
       lastSlowT.fill(-Infinity);
+      motionSeen.fill(-Infinity);
       lastChange.fill(-Infinity);
       longestGap.fill(STILL_MS);
       movingUntil.fill(0);

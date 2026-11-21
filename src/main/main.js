@@ -211,7 +211,8 @@ app.whenReady().then(() => {
   settings = loadSettings();
   lockDownNetwork();
   registerCaptureHandler();
-  volume = createVolumeControl();
+  // SHIELD_NO_VOLUME=1 (tests): decide everything, but never touch the real system volume
+  volume = process.env.SHIELD_NO_VOLUME === '1' ? null : createVolumeControl();
   registerIpc();
   createOverlay();
   createTray();

@@ -10,11 +10,11 @@ export async function startCapture(video) {
     // with the sound of whatever is playing (system loopback), for sound protection. Chromium's voice-call
     // processing would distort loudness readings, so it is all off.
     stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: 30 },
+      video: { frameRate: 60 }, // every frame of a flash counts: 60 fps halves the wait for the next one
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     });
   } catch {
-    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false }); // video only
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 60 }, audio: false }); // video only
   }
   video.srcObject = new MediaStream(stream.getVideoTracks()); // the <video> stays silent
   await video.play();
@@ -22,23 +22,22 @@ export async function startCapture(video) {
 }
 
 /**
- * Loudness of the captured system audio: `levelDb()` = RMS of the last ~43 ms in dBFS. Memory only.
+ * Loudness of the captured system audio, pushed every ~10 ms by an audio worklet: onLevel(cb(levelDb, tMs)).
+ * Analysed only: the audio goes into a silent gain node, never to the speakers. Memory only.
  * @param {MediaStream} stream
  */
-export function createSoundMeter(stream) {
+export async function createSoundMeter(stream) {
   const tracks = stream.getAudioTracks();
   if (!tracks.length) return null;
-  const ac = new AudioContext();
-  const an = ac.createAnalyser();
-  an.fftSize = 2048;
-  ac.createMediaStreamSource(new MediaStream(tracks)).connect(an); // analysed only, never played back
-  const buf = new Float32Array(an.fftSize);
+  const ac = new AudioContext({ latencyHint: 'interactive' });
+  await ac.audioWorklet.addModule(new URL('./level-worklet.js', import.meta.url));
+  const node = new AudioWorkletNode(ac, 'level-meter');
+  const mute = ac.createGain();
+  mute.gain.value = 0; // keeps the graph running without making any sound
+  ac.createMediaStreamSource(new MediaStream(tracks)).connect(node).connect(mute).connect(ac.destination);
   return {
-    levelDb() {
-      an.getFloatTimeDomainData(buf);
-      let s = 0;
-      for (let i = 0; i < buf.length; i++) s += buf[i] * buf[i];
-      return 10 * Math.log10(s / buf.length + 1e-12);
+    onLevel(cb) {
+      node.port.onmessage = (e) => cb(e.data, performance.now());
     },
     close() {
       ac.close();

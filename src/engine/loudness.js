@@ -7,8 +7,10 @@
 //     volume at once to about `allowOverDb` above that average, then releases over `releaseMs`.
 //   - Loudness jumps between content (quiet video, then a loud ad): when the level stays above `targetDb`,
 //     the volume is levelled down toward it, slowly (`levelTauMs`), so speech and music do not pump.
-//   - Unexpected sound after silence (autoplay): sound starting after `silenceMs` of quiet starts
-//     `softStartDb` down and eases in over `softStartMs`.
+//   - Unexpected sound after silence (autoplay): after `silenceMs` of quiet the volume is ALREADY lowered by
+//     `softStartDb` (inaudible, nothing is playing), so new sound starts quiet and eases in over `softStartMs`.
+//     Lowering only after the sound is detected would let its first ~10-50 ms through at full volume and then
+//     dip: an audible hitch, worse than nothing.
 // Reduces exposure to known triggers; it does not replace hearing protection.
 
 export const DEFAULT_LOUDNESS_CONFIG = Object.freeze({
@@ -25,7 +27,7 @@ export const DEFAULT_LOUDNESS_CONFIG = Object.freeze({
   targetDb: -22, // comfortable level for leveling (dBFS of the system mix)
   levelTauMs: 2000,
   maxLevelCutDb: -15,
-  silenceMs: 4000,
+  silenceMs: 5000, // long enough that ordinary pauses in a video do not count
   softStartDb: -18,
   softStartMs: 2000,
 });
@@ -49,14 +51,16 @@ export function createLoudnessGuard(config = {}) {
       lastT = t;
       const sound = levelDb > cfg.silenceDb;
 
-      // --- unexpected sound after silence: ease it in ---
+      // --- unexpected sound after silence: lowered in advance during the silence, eased in when it starts ---
+      let softCut = 0;
       if (!sound) {
         quietSince ??= t;
+        soft = null;
+        if (cfg.softStart && t - quietSince >= cfg.silenceMs) softCut = cfg.softStartDb; // pre-lowered, inaudible
       } else {
         if (cfg.softStart && quietSince !== null && t - quietSince >= cfg.silenceMs) soft = { t0: t };
         quietSince = null;
       }
-      let softCut = 0;
       if (soft) {
         const k = (t - soft.t0) / cfg.softStartMs;
         if (k >= 1) soft = null;

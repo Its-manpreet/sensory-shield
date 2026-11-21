@@ -87,7 +87,7 @@ test('red detection can be switched off (dark-red flash then has too little lumi
 
 test('fast onset: 0.5 s after the first 3 Hz change, 0.25 s after the first 6 Hz change', () => {
   // first change at 167 ms (3 Hz) / 83 ms (6 Hz); 2 full flashes later protection must be on
-  for (const [hz, limit] of [[3, 167 + 520], [6, 83 + 270]]) {
+  for (const [hz, limit] of [[3, 167 + 520], [6, 83 + 270]]) {  // (quick trigger makes it faster; see below)
     const hit = firstActive(run(createFlashDetector(), scenes.flash(hz)));
     assert.ok(hit && hit.tMs <= limit, `${hz} Hz first event at ${hit?.tMs} ms`);
   }
@@ -200,4 +200,34 @@ test('slow scrolling of white cards on a dark page (dark-mode feed, 300 px/s) is
     } });
     assert.equal(anyEvents(run(createFlashDetector({ minAreaFraction: 0.1 }), gen)), false, `${pxs} px/s`);
   }
+});
+
+test('quick trigger: protected after the FIRST full flash (6 Hz ~0.17 s, 3 Hz ~0.33 s after it starts)', () => {
+  // first change at 83 ms (6 Hz) / 167 ms (3 Hz); the swing back comes one half-period later
+  for (const [hz, limit] of [[6, 175], [3, 340]]) {
+    const hit = firstActive(run(createFlashDetector(), scenes.flash(hz)));
+    assert.ok(hit && hit.tMs <= limit, `${hz} Hz first event at ${hit?.tMs} ms`);
+  }
+});
+
+test('quick trigger ignores a single scene cut and small blips', () => {
+  const cut = frames({ seconds: 3, pixel: (_x, _y, t) => (t < 1500 ? [30, 30, 30] : [230, 230, 230]) });
+  assert.equal(anyEvents(run(createFlashDetector(), cut)), false);
+  const blip = frames({ seconds: 2, pixel: (_x, _y, t) => (t > 800 && t < 900 ? [110, 110, 110] : [70, 70, 70]) });
+  assert.equal(anyEvents(run(createFlashDetector(), blip)), false, 'small swing');
+});
+
+test('60 fps capture: slow card scrolling and photo scrolling stay quiet, flashing is still caught fast', () => {
+  const card = 140 / 956, gap = 18 / 956;
+  for (const pxs of [200, 300, 450]) {
+    const gen = frames({ seconds: 3, fps: 60, ss: 4, pixel: (x, y, t) => {
+      const yy = (y + (t / 1000) * (pxs / 956)) % (card + gap);
+      return x > 0.27 && x < 0.73 && yy < card ? [245, 245, 245] : [20, 24, 30];
+    } });
+    assert.equal(anyEvents(run(createFlashDetector({ minAreaFraction: 0.1 }), gen)), false, `cards ${pxs} px/s`);
+  }
+  for (const px of [800, 2500]) assert.equal(anyEvents(run(createFlashDetector(), scenes.scrollPhotos(px, { fps: 60 }))), false, `photos ${px} px/s`);
+  const flash60 = frames({ seconds: 1, fps: 60, pixel: (_x, _y, t) => (Math.floor((t / 1000) * 12) % 2 ? [0, 0, 0] : [255, 255, 255]) });
+  const hit = firstActive(run(createFlashDetector(), flash60));
+  assert.ok(hit && hit.tMs <= 175, `6 Hz at 60 fps: ${hit?.tMs}`);
 });

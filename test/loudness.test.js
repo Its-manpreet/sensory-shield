@@ -33,13 +33,19 @@ test('quiet video then a loud ad: levelled down toward the comfortable level, sl
   assert.ok(later < -9 && later >= -15, `settles near target: ${later}`);
 });
 
-test('sound after a long silence (autoplay) eases in over ~2 s; continuous sound does not', () => {
-  const out = trace((t) => (t < 5000 ? -90 : -24), 8000, { limiter: false, leveling: false });
-  const start = at(out, 5000);
-  assert.ok(start.gainDb <= -17 && start.reason === 'soft-start', JSON.stringify(start));
-  assert.ok(at(out, 6000).gainDb > start.gainDb);
-  assert.equal(at(out, 7100).gainDb, 0);
-  const cont = trace(() => -24, 6000, { limiter: false, leveling: false });
+test('sound after a long silence (autoplay): volume already lowered DURING the silence, then eased in (no hitch)', () => {
+  const out = trace((t) => (t < 6000 ? -90 : -24), 9000, { limiter: false, leveling: false });
+  assert.equal(at(out, 4900).gainDb, 0, 'not yet: short silences are left alone');
+  const ready = at(out, 5950);
+  assert.ok(ready.gainDb <= -17 && ready.reason === 'soft-start', `pre-lowered before the sound: ${JSON.stringify(ready)}`);
+  const start = at(out, 6000);
+  assert.ok(start.gainDb <= -17, 'the first sound arrives already quiet');
+  assert.ok(at(out, 7000).gainDb > start.gainDb);
+  assert.equal(at(out, 8100).gainDb, 0);
+  // never a dip after the sound has started: the gain only rises from the first sound on
+  const after = out.filter((o) => o.t >= 6000);
+  for (let i = 1; i < after.length; i++) assert.ok(after[i].gainDb >= after[i - 1].gainDb - 1e-9, `dip at ${after[i].t}`);
+  const cont = trace(() => -24, 8000, { limiter: false, leveling: false });
   assert.ok(cont.slice(2).every((o) => o.gainDb === 0));
 });
 

@@ -10,8 +10,8 @@
 // The flash detector already holds protection while it matters and releases a paused/still area fast;
 // this only bridges a frame or two of jitter before fading out.
 const HOLD_MS = 100;
-// Protection appears fast (every extra frame of a flash matters) and leaves at the profile's fade time.
-const FADE_IN_MAX_MS = 120;
+// Protection appears at full strength at once (every frame of a flash matters) and leaves gently, at the
+// profile's fade time.
 const SMOOTH_W = 192;
 const SMOOTH_H = 108;
 
@@ -230,12 +230,12 @@ export function createEffects(canvas, video, opts = {}) {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!video.videoWidth) return;
     const stepOut = fadeMs > 0 ? dt / fadeMs : 1;
-    const stepIn = Math.max(stepOut, dt / FADE_IN_MAX_MS);
+
     const revealing = nowMs < revealUntil;
     const dims = [], glass = [], labels = [];
     for (const [id, e] of live) {
       const wanted = !revealing && nowMs - e.seenAt <= HOLD_MS;
-      e.alpha = Math.max(0, Math.min(1, e.alpha + (wanted ? stepIn : -stepOut)));
+      e.alpha = wanted ? 1 : Math.max(0, e.alpha - stepOut);
       if (e.alpha === 0) {
         if (!wanted && nowMs - e.seenAt > HOLD_MS) live.delete(id);
         continue;
@@ -268,13 +268,23 @@ export function createEffects(canvas, video, opts = {}) {
   }
 
   return {
-    /** @param {Region[]} regions @param {number} nowMs */
+    /**
+     * @param {Region[]} regions @param {number} nowMs
+     * @returns {boolean} true when a region was not showing before (the caller draws at once, not next frame)
+     */
     setRegions(regions, nowMs) {
+      let added = false;
       for (const r of regions) {
         const e = live.get(r.id);
-        if (e) (e.region = r), (e.seenAt = nowMs);
-        else live.set(r.id, { region: r, alpha: 0, seenAt: nowMs, frozen: null });
+        if (e) {
+          if (e.alpha === 0) added = true;
+          (e.region = r), (e.seenAt = nowMs);
+        } else {
+          live.set(r.id, { region: r, alpha: 0, seenAt: nowMs, frozen: null });
+          added = true;
+        }
       }
+      return added;
     },
     /** @param {number} ms */
     revealAll(ms) {
