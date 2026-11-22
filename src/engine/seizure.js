@@ -48,7 +48,7 @@ export const SEIZURE_DEFAULTS = {
   windowSec: 5,
   minHz: 1.2,
   maxHz: 6,
-  fundamentalHz: 0.4, // how slow a movement the harmonic check looks for
+  fundamentalHz: 0.4, // how slow a movement the harmonic check looks for (lowered with minHz)
   harmonicMargin: 0.2,
   minStd: 7,
   minCorr: 0.3,
@@ -61,16 +61,32 @@ export const SEIZURE_DEFAULTS = {
   // clothes, blur), but it cannot tell WHERE things move, so it only counts when the moving cells also
   // pass the same area and spread checks as the cell path.
   energyDiffMin: 3, // per-cell differences below this are sensor noise (set to 0)
-  energyBand: [2, 8],
-  minMotion: 1.2, // mean energy over the window (0..255 scale)
+  energyBand: null, // [lo, hi] Hz of motion energy; null = [min(2, 2*minHz), max(8, 2*maxHz)]
+  minMotion: 1.2, // mean energy over the window (0..255 scale); below this nothing counts, on either path
   minRhythm: 0.4, // peak power / power above 0.5 Hz
   minDurationSec: 10,
   gapSec: 1.5,
+  // 'rhythm' = the checks above. 'threshold' = plain mode: motion (the readout) at or over motionThreshold
+  // counts, nothing else is checked (no rhythm, area or spread). In BOTH modes motion over motionThreshold
+  // counts: very violent movement is blurred and irregular and can stop looking rhythmic, and must not drop out.
+  mode: 'rhythm',
+  motionThreshold: 25,
+};
+
+/** The settings a user can tune (Settings > Guardian > Detection), and a preset for small movements. */
+export const SEIZURE_TUNABLE = ['minMotion', 'minAreaFraction', 'minRegions', 'minStd', 'minCorr', 'minRhythm', 'minHz', 'maxHz', 'harmonicMargin', 'windowSec', 'gapSec'];
+export const SEIZURE_PRESETS = {
+  default: Object.fromEntries(SEIZURE_TUNABLE.map((k) => [k, SEIZURE_DEFAULTS[k]])),
+  // a head nodding or shaking: one small area, little whole-picture motion, can be slower than whole-body jerking
+  // (8 s of history lets the harmonic check see slow sway, which would otherwise pass at these settings)
+  small: { minMotion: 0.1, minAreaFraction: 0.01, minRegions: 1, minStd: 4, minCorr: 0.35, minRhythm: 0.3, minHz: 0.7, maxHz: 6, harmonicMargin: 0.1, windowSec: 8, gapSec: 2 },
 };
 
 /** @param {Partial<SeizureConfig>} [config] */
 export function createSeizureDetector(config = {}) {
   const c = { ...SEIZURE_DEFAULTS, ...config };
+  c.energyBand ??= [Math.min(2, 2 * c.minHz), Math.max(8, 2 * c.maxHz)];
+  if (!('fundamentalHz' in config)) c.fundamentalHz = Math.min(SEIZURE_DEFAULTS.fundamentalHz, c.minHz / 2, 2 / c.windowSec);
   const cells = c.gridW * c.gridH;
   const MAXN = 256; // ring capacity per cell (5 s at up to 50 fps)
   const ring = new Float32Array(cells * MAXN);
@@ -184,7 +200,9 @@ export function createSeizureDetector(config = {}) {
     const e = energyRhythm(n, fps);
     const energyPath = e.motion >= c.minMotion && e.rhythm >= c.minRhythm && moving / cells >= c.minAreaFraction && movingRegions.size >= c.minRegions;
     const cellPath = fraction >= c.minAreaFraction && regions.size >= c.minRegions;
-    const now = cellPath || energyPath;
+    // minMotion gates both paths: whole-frame movement weaker than this never counts (user setting)
+    const over = e.motion >= c.motionThreshold;
+    const now = over || (c.mode !== 'threshold' && e.motion >= c.minMotion && (cellPath || energyPath));
     if (now) {
       if (runStart < 0 || tMs - lastRhythmic > c.gapSec * 1000) runStart = tMs;
       lastRhythmic = tMs;
@@ -194,7 +212,7 @@ export function createSeizureDetector(config = {}) {
     const since = runStart >= 0 ? lastRhythmic - runStart : 0;
     const progress = Math.min(1, since / (c.minDurationSec * 1000));
     const level = progress >= 1 ? 'suspect' : runStart >= 0 ? 'rhythmic' : 'normal';
-    return state(level, progress, fraction, freqHz || (energyPath ? e.peakHz / 2 : 0), since, dark, { ...e, path: cellPath ? 'cells' : energyPath ? 'energy' : null });
+    return state(level, progress, fraction, freqHz || (energyPath ? e.peakHz / 2 : 0), since, dark, { ...e, path: over ? 'threshold' : c.mode === 'threshold' ? null : cellPath ? 'cells' : energyPath ? 'energy' : null });
   }
 
   /**

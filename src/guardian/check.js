@@ -40,7 +40,9 @@ function render() {
     $('why').textContent =
       ladder.reason === 'manual'
         ? 'You pressed the help hotkey.'
-        : ladder.reason === 'preview'
+        : ladder.reason === 'worse'
+          ? 'The movement got stronger after you said you were OK.'
+          : ladder.reason === 'preview'
           ? 'This is a preview of the check. Nothing will be sent.'
           : 'Guardian noticed strong rhythmic movement.';
     $('count').textContent = String(left);

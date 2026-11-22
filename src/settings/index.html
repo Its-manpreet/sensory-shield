@@ -100,9 +100,30 @@
             <p class="hint">Each contact installs the free <strong>ntfy</strong> app on their phone and subscribes to the code shown next to their name. Alerts go through ntfy.sh.</p>
           </div>
           <div class="field">
-            <label for="g-duration">Ask after rhythmic movement for <output id="g-duration-out" for="g-duration"></output></label>
-            <input id="g-duration" type="range" min="6" max="20" step="1" />
+            <span class="label" id="g-mode-label">Trigger mode</span>
+            <div id="g-mode" class="segmented two" role="radiogroup" aria-labelledby="g-mode-label">
+              <button role="radio" data-value="threshold">Simple: motion over a number</button>
+              <button role="radio" data-value="rhythm">Smart: rhythmic shaking</button>
+            </div>
           </div>
+          <div class="field" id="g-threshold-field">
+            <label for="g-threshold"><span id="g-threshold-label">Trigger when motion is over </span><output id="g-threshold-out" for="g-threshold"></output></label>
+            <input id="g-threshold" type="range" min="0.5" max="60" step="0.5" />
+            <p class="hint">"motion" is the number in the status line above. Move in front of the camera to see what yours reaches.</p>
+          </div>
+          <div class="field">
+            <label for="g-duration">Ask "Are you OK?" once it lasts for <output id="g-duration-out" for="g-duration"></output></label>
+            <input id="g-duration" type="range" min="1" max="20" step="1" />
+          </div>
+          <details class="field" id="g-tuning-box">
+            <summary>Detection tuning</summary>
+            <p class="hint">Lower numbers notice smaller movements but open the check more often by mistake. Compare with the motion, rhythm and Hz readout in the status line above.</p>
+            <div class="actions">
+              <button id="g-preset-small" class="btn" type="button">Small movements (head)</button>
+              <button id="g-preset-default" class="btn" type="button">Whole body (default)</button>
+            </div>
+            <div id="g-tuning"></div>
+          </details>
           <div class="field">
             <label for="g-countdown">Time to answer before alerting <output id="g-countdown-out" for="g-countdown"></output></label>
             <input id="g-countdown" type="range" min="10" max="60" step="5" />

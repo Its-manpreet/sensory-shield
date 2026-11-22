@@ -3,6 +3,7 @@
 // Every change is saved immediately and the overlay applies it without a restart.
 import { getSettings, setSettings, onChange } from '../shared/store.js';
 import { PHOBIAS } from '../engine/categories.js';
+import { SEIZURE_PRESETS } from '../engine/seizure.js';
 
 const $ = (id) => document.getElementById(id);
 const shield = window.shield; // undefined when opened as a plain web page (mock store)
@@ -272,7 +273,7 @@ $('open-permission').addEventListener('click', () => shield?.openPermission());
 $('relaunch').addEventListener('click', () => shield?.relaunch());
 
 // --- Guardian (camera) ---
-const guardian = () => settings.guardian ?? { enabled: false, userName: '', contacts: [], minDurationSec: 10, countdownSec: 30 };
+const guardian = () => settings.guardian ?? { enabled: false, userName: '', contacts: [], minDurationSec: 10, countdownSec: 30, mode: 'threshold', motionThreshold: 25, ...SEIZURE_PRESETS.default };
 let guardianStatus = null;
 function patchGuardian(values) {
   settings = { ...settings, guardian: { ...guardian(), ...values } };
@@ -286,6 +287,18 @@ function renderGuardian() {
   if (document.activeElement !== $('g-name')) $('g-name').value = g.userName ?? '';
   $('g-duration').value = g.minDurationSec;
   $('g-duration-out').textContent = `${g.minDurationSec} s`;
+  const simple = g.mode === 'threshold';
+  setRadio($('g-mode'), simple ? 'threshold' : 'rhythm');
+  $('g-threshold-label').textContent = simple ? 'Trigger when motion is over ' : 'Also trigger whenever motion is over ';
+  $('g-tuning-box').hidden = simple;
+  $('g-threshold').value = g.motionThreshold ?? 25;
+  $('g-threshold-out').textContent = String(g.motionThreshold ?? 25);
+  for (const t of G_TUNING) {
+    const v = g[t.key] ?? SEIZURE_PRESETS.default[t.key];
+    const input = $(`g-t-${t.key}`);
+    if (document.activeElement !== input) input.value = String(v * (t.scale ?? 1));
+    $(`g-t-${t.key}-out`).textContent = t.fmt(v);
+  }
   $('g-countdown').value = g.countdownSec;
   $('g-countdown-out').textContent = `${g.countdownSec} s`;
   $('g-contacts').replaceChildren(
@@ -316,20 +329,28 @@ function renderGuardianStatus() {
   const el = $('guardian-status');
   if (!g.enabled || !st) return void (el.textContent = '');
   let text, tone;
-  if (st.camera === 'denied') (text = 'Camera access is off. Allow it in System Settings > Privacy > Camera.'), (tone = 'warn');
+  if (st.camera === 'denied') (text = `Camera access is off. Allow it in ${status.platform === 'win32' ? 'Settings > Privacy & security > Camera (also "Let desktop apps access your camera")' : 'System Settings > Privacy > Camera'}.`), (tone = 'warn');
   else if (st.camera === 'unavailable') (text = 'No camera found.'), (tone = 'warn');
   else if (st.camera !== 'ok') (text = 'Starting the camera…'), (tone = '');
   else if (st.dark) (text = 'Too dark for the camera to see you.'), (tone = 'warn');
   else if (st.phase === 'check') (text = 'Asking "Are you OK?"'), (tone = 'warn');
   else if (st.phase === 'sent') (text = 'Help alert sent.'), (tone = 'warn');
   else if (st.level === 'warming') (text = 'Camera on, getting ready…'), (tone = '');
-  else if (st.level === 'rhythmic') (text = `Watching: rhythmic movement (${Math.round(st.progress * 100)}%)`), (tone = 'warn');
+  else if (st.level === 'suspect') (text = 'Strong movement. You said OK recently: it asks again if this gets stronger.'), (tone = 'warn');
+  else if (st.level === 'rhythmic') (text = `Watching: ${st.path === 'threshold' ? 'motion over the limit' : 'rhythmic movement'} (${Math.round(st.progress * 100)}%)`), (tone = 'warn');
   else (text = 'Watching. Video stays on this device.'), (tone = 'good');
   if (!g.contacts?.length) (text += ' Add a contact so alerts reach someone.'), (tone = tone || 'warn');
   // live readout for tuning (as in shake_proxy_detector.py): motion energy, rhythm 0..1, rate
-  if (st.camera === 'ok' && st.level !== 'warming' && st.motion != null) text += ` (motion ${st.motion.toFixed(1)} · rhythm ${st.rhythm.toFixed(2)}${st.freqHz ? ` · ${st.freqHz.toFixed(1)} Hz` : ''})`;
   el.textContent = text;
   el.dataset.tone = tone;
+  if (st.camera === 'ok' && st.level !== 'warming' && st.motion != null) {
+    // every reading at or over the limit shows in red, however far over it goes; back to normal when it drops
+    const over = st.motion >= (g.motionThreshold ?? 25);
+    const nums = document.createElement('span');
+    nums.className = over ? 'readout over' : 'readout';
+    nums.textContent = ` (motion ${st.motion.toFixed(1)}${over ? ` ≥ ${g.motionThreshold ?? 25}` : ''} · rhythm ${st.rhythm.toFixed(2)}${st.freqHz ? ` · ${st.freqHz.toFixed(1)} Hz` : ''})`;
+    el.append(nums);
+  }
 }
 $('guardian-enabled').addEventListener('click', () => patchGuardian({ enabled: !guardian().enabled }));
 $('g-name').addEventListener('input', (e) => {
@@ -345,6 +366,44 @@ $('g-add').addEventListener('submit', async (e) => {
   $('g-contact-name').value = '';
 });
 $('g-duration').addEventListener('input', (e) => patchGuardian({ minDurationSec: Number(e.target.value) }));
+// Detection tuning: one slider per detector setting (src/engine/seizure.js SEIZURE_TUNABLE)
+const G_TUNING = [
+  { key: 'minMotion', label: 'Minimum motion (whole picture)', min: 0, max: 30, step: 0.1, fmt: (v) => v.toFixed(1) },
+  { key: 'minAreaFraction', label: 'Minimum moving area', min: 0.5, max: 30, step: 0.5, scale: 100, fmt: (v) => `${(v * 100).toFixed(1)}% of picture` },
+  { key: 'minRegions', label: 'Parts of the picture that must move (of 9)', min: 1, max: 9, step: 1, fmt: (v) => String(v) },
+  { key: 'minStd', label: 'Brightness change a spot needs', min: 2, max: 30, step: 0.5, fmt: (v) => v.toFixed(1) },
+  { key: 'minCorr', label: 'How regular each spot must be', min: 0.1, max: 0.9, step: 0.05, fmt: (v) => v.toFixed(2) },
+  { key: 'minRhythm', label: 'How regular the whole picture must be', min: 0.1, max: 0.95, step: 0.05, fmt: (v) => v.toFixed(2) },
+  { key: 'minHz', label: 'Slowest rhythm', min: 0.5, max: 3, step: 0.1, fmt: (v) => `${v.toFixed(1)} Hz` },
+  { key: 'maxHz', label: 'Fastest rhythm', min: 2, max: 7, step: 0.5, fmt: (v) => `${v.toFixed(1)} Hz` },
+  { key: 'harmonicMargin', label: 'Ignore slow swaying (lower = stricter)', min: 0, max: 0.5, step: 0.05, fmt: (v) => v.toFixed(2) },
+  { key: 'windowSec', label: 'History looked at', min: 3, max: 10, step: 1, fmt: (v) => `${v} s` },
+  { key: 'gapSec', label: 'Pause allowed before the count restarts', min: 0.5, max: 5, step: 0.5, fmt: (v) => `${v} s` },
+];
+$('g-tuning').replaceChildren(
+  ...G_TUNING.map((t) => {
+    const div = document.createElement('div');
+    div.className = 'field';
+    const label = document.createElement('label');
+    label.htmlFor = `g-t-${t.key}`;
+    label.textContent = `${t.label} `;
+    const out = document.createElement('output');
+    out.id = `g-t-${t.key}-out`;
+    label.append(out);
+    const input = document.createElement('input');
+    Object.assign(input, { id: `g-t-${t.key}`, type: 'range', min: t.min, max: t.max, step: t.step });
+    input.addEventListener('input', () => {
+      const v = Number(input.value) / (t.scale ?? 1);
+      patchGuardian({ [t.key]: t.key === 'minHz' ? Math.min(v, guardian().maxHz - 0.5) : t.key === 'maxHz' ? Math.max(v, guardian().minHz + 0.5) : v });
+    });
+    div.append(label, input);
+    return div;
+  }),
+);
+radioKeys($('g-mode'), (mode) => patchGuardian({ mode }));
+$('g-threshold').addEventListener('input', (e) => patchGuardian({ motionThreshold: Number(e.target.value) }));
+$('g-preset-small').addEventListener('click', () => patchGuardian({ ...SEIZURE_PRESETS.small }));
+$('g-preset-default').addEventListener('click', () => patchGuardian({ ...SEIZURE_PRESETS.default }));
 $('g-countdown').addEventListener('input', (e) => patchGuardian({ countdownSec: Number(e.target.value) }));
 $('g-test').addEventListener('click', async () => {
   if (!shield) return;

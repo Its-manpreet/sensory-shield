@@ -106,7 +106,7 @@ function openSettings() {
     title: 'Sensory Shield',
     show: !SELFTEST,
     backgroundColor: '#f5f5f7',
-    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset', vibrancy: 'under-window', visualEffectState: 'active', backgroundColor: '#00000000' } : {}),
+    ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset', vibrancy: 'under-window', visualEffectState: 'active', backgroundColor: '#00000000' } : { autoHideMenuBar: true }), // Windows/Linux: no File/Edit/View bar
     webPreferences: { preload: PRELOAD, sandbox: true, contextIsolation: true },
   });
   forwardConsole(settingsWin, 'settings');
@@ -256,6 +256,9 @@ function registerCaptureHandler() {
   });
 }
 
+// Windows: our own identity for the taskbar / notifications instead of "Electron"
+if (process.platform === 'win32') app.setAppUserModelId('app.sensoryshield');
+
 app.whenReady().then(() => {
   settings = loadSettings();
   lockDownNetwork();
@@ -275,10 +278,11 @@ app.whenReady().then(() => {
   guardian.sync();
   createOverlay();
   createTray();
-  globalShortcut.register(HOTKEYS.reveal, toggleReveal);
-  globalShortcut.register(HOTKEYS.toggle, () => setEnabled(!settings.enabled));
-  globalShortcut.register(HOTKEYS.settings, openSettings);
-  globalShortcut.register(HOTKEYS.help, () => guardian?.sos());
+  const hotkeys = [[HOTKEYS.reveal, toggleReveal], [HOTKEYS.toggle, () => setEnabled(!settings.enabled)], [HOTKEYS.settings, openSettings], [HOTKEYS.help, () => guardian?.sos()]];
+  for (const [accel, fn] of hotkeys) {
+    // another app may own the combination (common on Windows); the tray menu still works
+    if (!globalShortcut.register(accel, fn)) console.warn(`[main] hotkey ${accel} is taken by another app`);
+  }
   openSettings(); // the window is the app's face; closing it leaves the shield running in the tray
   if (SELFTEST) {
     setTimeout(() => app.quit(), SPIKE ? 9000 : Number(process.env.SHIELD_SELFTEST_MS) || 6000);

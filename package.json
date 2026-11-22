@@ -7,20 +7,21 @@
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node --test test/",
-    "selftest": "SHIELD_SELFTEST=1 electron .",
-    "clips": "sh test/make-clips.sh",
-    "spike": "SHIELD_SELFTEST=1 SHIELD_SPIKE=1 electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "selftest": "node scripts/run.js --selftest",
+    "clips": "node test/make-clips.js",
+    "spike": "node scripts/run.js --selftest --spike",
     "demo": "node test/serve.js",
-    "app": "open -n -a \"$PWD/node_modules/electron/dist/Electron.app\" --args \"$PWD\"",
-    "app:debug": "mkdir -p logs && open -n -a \"$PWD/node_modules/electron/dist/Electron.app\" --env SHIELD_DEBUG=1 --stdout \"$PWD/logs/debug.log\" --stderr \"$PWD/logs/debug.log\" --args \"$PWD\"",
+    "app": "node scripts/run.js --detach",
+    "app:debug": "node scripts/run.js --detach --debug",
     "dist": "electron-builder",
     "dist:dir": "electron-builder --dir",
     "content:setup": "node scripts/content-setup.js",
     "content:eval-images": "node test/content/fetch-eval-images.js && electron test/content/run-page.js test/content/image-eval.html",
     "content:check-text": "electron test/content/run-page.js test/content/text-check.html && electron test/content/ocr-check.js",
     "content:bench": "electron test/content/run-page.js test/content/bench.html",
-    "content:latency": "electron test/content/live-latency.js"
+    "content:latency": "electron test/content/live-latency.js",
+    "start:debug": "node scripts/run.js --debug"
   },
   "license": "UNLICENSED",
   "devDependencies": {

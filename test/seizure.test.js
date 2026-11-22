@@ -2,7 +2,7 @@
 // A "body" is a textured block that moves; the background is a fixed texture plus camera noise.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSeizureDetector } from '../src/engine/seizure.js';
+import { createSeizureDetector, SEIZURE_PRESETS } from '../src/engine/seizure.js';
 
 const W = 32;
 const H = 24;
@@ -74,6 +74,72 @@ test('minDurationSec is respected', () => {
   const hit = firstSuspect(run(scene({ shift: shake(3), seconds: 30 }), { minDurationSec: 18 }));
   assert.ok(hit && hit.t >= 18, `suspect at ${hit?.t}`);
 });
+
+test('minDurationSec 1 s: steady shaking is flagged within a few seconds', () => {
+  const hit = firstSuspect(run(scene({ shift: shake(3), seconds: 15 }), { minDurationSec: 1 }));
+  assert.ok(hit && hit.t < 8, `suspect at ${hit?.t}`);
+});
+
+test('minMotion is respected: a high limit ignores the same shaking', () => {
+  const frames = scene({ shift: shake(3), seconds: 20 });
+  assert.ok(firstSuspect(run(frames)));
+  const res = run(frames, { minMotion: 30 });
+  assert.ok(!firstSuspect(res) && !res.some((s) => s.level === 'rhythmic'));
+});
+
+test('threshold mode: motion over the number triggers, under it never does, rhythm not needed', () => {
+  // random jumps: no rhythm at all, so the rhythm mode ignores it
+  const jumpy = (t) => (Math.floor(t * 7) * 2654435761) % 7 - 3;
+  const frames = [...scene({ shift: jumpy, seconds: 20 })];
+  const res = run(frames, { mode: 'threshold', motionThreshold: 1, minDurationSec: 2 });
+  const hit = firstSuspect(res);
+  assert.ok(hit && hit.path === 'threshold', 'over the number -> suspect');
+  const peak = Math.max(...res.map((s) => s.motion));
+  assert.ok(!firstSuspect(run(frames, { mode: 'threshold', motionThreshold: peak + 0.5, minDurationSec: 2 })), 'under the number -> never');
+  assert.ok(!firstSuspect(run(frames, { mode: 'threshold', motionThreshold: 25 })), 'synthetic movement is well under 25');
+});
+
+test('severe movement still counts in smart mode, however far over the limit and however irregular', () => {
+  // violent, irregular, whole-body: random jumps, no rhythm
+  const violent = (t) => ((Math.floor(t * 9) * 2654435761) % 13) - 6;
+  const frames = [...scene({ shift: violent, seconds: 20 })];
+  assert.ok(!firstSuspect(run(frames, { mode: 'rhythm', motionThreshold: 1e9 })), 'not rhythmic: smart checks alone miss it');
+  const res = run(frames, { mode: 'rhythm', motionThreshold: 1 });
+  const hit = firstSuspect(res);
+  assert.ok(hit && hit.path === 'threshold', 'over the limit -> suspect even in smart mode');
+  // once over, it stays categorised while it stays over (no upper cut-off)
+  const after = res.filter((s) => s.t >= hit.t);
+  assert.ok(after.every((s) => s.motion < 1 || s.level === 'suspect'));
+});
+
+// "Small movements (head)" preset: a head-sized area moving a little, not caught by the whole-body defaults
+const HEAD = { x: 13, y: 2, w: 6, h: 6 };
+for (const [name, shift] of [
+  ['nodding 1 Hz', shake(1, 1)],
+  ['shaking 2 Hz, small', shake(2, 0.6)],
+  ['jerking 3 Hz, small', shake(3, 0.5)],
+  ['slow nod 0.8 Hz', shake(0.8, 1.5)],
+  ['tiny 1.5 Hz', shake(1.5, 0.3)],
+]) {
+  test(`small preset: head ${name} -> suspect (defaults ignore it)`, () => {
+    const frames = [...scene({ shift, rect: HEAD, seconds: 20 })];
+    assert.ok(firstSuspect(run(frames, SEIZURE_PRESETS.small)));
+    assert.ok(!firstSuspect(run(frames)));
+  });
+}
+for (const [name, opts] of [
+  ['still person', {}],
+  ['empty room, heavy camera noise', { rect: { x: 0, y: 0, w: 0, h: 0 }, noise: 6 }],
+  ['slow sway 0.3 Hz', { shift: shake(0.3, 3) }],
+  ['leaning 0.6 Hz', { shift: shake(0.6, 2) }],
+  ['head drifting 0.5 Hz', { shift: shake(0.5, 1), rect: HEAD }],
+  ['one slow head turn', { shift: (t) => (t > 5 && t < 8 ? 2 * Math.sin((Math.PI * (t - 5)) / 3) : 0), rect: HEAD }],
+  ['lights switching', { light: (t) => (Math.floor(t / 4) % 2 ? 1 : 0.6) }],
+]) {
+  test(`small preset: never suspect: ${name}`, () => {
+    assert.ok(!firstSuspect(run(scene({ ...opts, seconds: 20 }), SEIZURE_PRESETS.small)));
+  });
+}
 
 for (const [name, opts] of [
   ['still person, camera noise', {}],

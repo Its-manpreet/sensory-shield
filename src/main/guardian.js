@@ -10,11 +10,13 @@ import { BrowserWindow, ipcMain, systemPreferences, app, screen } from 'electron
 import fs from 'node:fs';
 import path from 'node:path';
 import { sendAlert, newTopic } from './alert.js';
+import { SEIZURE_TUNABLE } from '../engine/seizure.js';
 
 const RETRY_MS = 30_000;
 const MAX_RETRIES = 10;
 const COOLDOWN_MS = 60_000; // after "I'm OK", don't ask again straight away
 const SOS_COUNTDOWN_S = 5;
+const WORSE_FACTOR = 1.5; // inside the quiet period, motion this much above what it was when they said OK asks again
 
 /**
  * @param {{ getSettings: () => any, preload: string, src: string, onChange?: () => void }} o
@@ -30,6 +32,8 @@ export function createGuardian({ getSettings, preload, src, onChange = () => {} 
   let retryTimer = 0;
   let retries = 0;
   let cooldownUntil = 0;
+  let peakMotion = 0; // strongest motion seen during the current check
+  let okMotion = 0; // peakMotion when they last said "I'm OK"
 
   const g = () => getSettings().guardian ?? {};
   const contacts = () => (g().contacts ?? []).filter((c) => c.topic);
@@ -85,7 +89,7 @@ export function createGuardian({ getSettings, preload, src, onChange = () => {} 
   function sync() {
     if (g().enabled) startCamera();
     else stopCamera();
-    if (camWin) camWin.webContents.send('guardian:config', { minDurationSec: g().minDurationSec ?? 10 });
+    if (camWin) camWin.webContents.send('guardian:config', { minDurationSec: g().minDurationSec ?? 10, mode: g().mode ?? 'threshold', motionThreshold: g().motionThreshold ?? 25, ...Object.fromEntries(SEIZURE_TUNABLE.filter((k) => g()[k] != null).map((k) => [k, g()[k]])) });
   }
 
   // ---- check window ----
@@ -136,6 +140,7 @@ export function createGuardian({ getSettings, preload, src, onChange = () => {} 
     if (ladder.phase === 'check' || ladder.phase === 'sent') return;
     clearTimeout(timer);
     ladder = { phase: 'check', reason, deadline: Date.now() + seconds * 1000 };
+    peakMotion = cam.motion ?? 0;
     log('check', { reason });
     timer = setTimeout(alertNow, seconds * 1000);
     showCheck();
@@ -155,7 +160,9 @@ export function createGuardian({ getSettings, preload, src, onChange = () => {} 
     const message =
       reason === 'manual'
         ? `${who()} pressed the help hotkey at ${clock()}. Please check on them now.`
-        : `Sensory Shield noticed strong rhythmic movement (a possible seizure) at ${clock()} and ${who()} did not answer an "Are you OK?" check. Please check on them now.`;
+        : reason === 'worse'
+          ? `Sensory Shield noticed movement getting stronger (a possible seizure) at ${clock()}, after ${who()} had said they were OK, and ${who()} did not answer this time. Please check on them now.`
+          : `Sensory Shield noticed strong rhythmic movement (a possible seizure) at ${clock()} and ${who()} did not answer an "Are you OK?" check. Please check on them now.`;
     retries = 0;
     const attempt = async () => {
       const pending = contacts().filter((c) => !(ladder.results ?? []).some((r) => r.ok && r.name === (c.name || c.topic)));
@@ -183,6 +190,7 @@ export function createGuardian({ getSettings, preload, src, onChange = () => {} 
     const wasSent = ladder.phase === 'sent' && (ladder.results ?? []).some((r) => r.ok);
     log(wasSent ? 'all-clear' : 'cancelled', { reason: ladder.reason });
     cooldownUntil = Date.now() + COOLDOWN_MS;
+    okMotion = peakMotion;
     camWin?.webContents.send('guardian:reset');
     if (wasSent) {
       ladder = { phase: 'cleared' };
@@ -205,8 +213,12 @@ export function createGuardian({ getSettings, preload, src, onChange = () => {} 
   // ---- IPC ----
   ipcMain.on('guardian:state', (_e, s) => {
     cam = s; // counts and levels only, never pixels
-    if (s.level === 'suspect' && ladder.phase === 'idle' && Date.now() > cooldownUntil && g().enabled) {
-      startCheck('movement', g().countdownSec ?? 30);
+    if (ladder.phase === 'check' || ladder.phase === 'sent') peakMotion = Math.max(peakMotion, s.motion ?? 0);
+    if (s.level === 'suspect' && ladder.phase === 'idle' && g().enabled) {
+      // the quiet period after "I'm OK" stops nagging about the SAME movement, never about it getting worse
+      const worse = (s.motion ?? 0) >= Math.max(1, okMotion * WORSE_FACTOR);
+      if (Date.now() > cooldownUntil) startCheck('movement', g().countdownSec ?? 30);
+      else if (worse) startCheck('worse', g().countdownSec ?? 30);
     }
     onChange();
   });

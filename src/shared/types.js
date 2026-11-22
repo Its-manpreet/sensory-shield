@@ -27,6 +27,6 @@ export {};
 /** @typedef {{colorFlicker: boolean, loudLimiter: boolean, loudLeveling: boolean, softStart: boolean, harshTones: boolean}} Sensory */
 /** @typedef {{enabled: boolean, nudity: boolean, sexualText: boolean, gore: boolean, violence: boolean, phobias: string[], custom: string[], sensitivity: number}} Safety */
 /** @typedef {{enabled: boolean, activeProfileId: string, profiles: Record<string, Profile>, appearance: Appearance, sensory: Sensory, safety: Safety, guardian: Guardian}} Settings */
-/** @typedef {{enabled: boolean, userName: string, contacts: {name: string, topic: string}[], server: string, minDurationSec: number, countdownSec: number}} Guardian */
+/** @typedef {{enabled: boolean, userName: string, contacts: {name: string, topic: string}[], server: string, minDurationSec: number, countdownSec: number} & Partial<import('../engine/seizure.js').SeizureConfig>} Guardian */
 
 /** @typedef {{fps: number, flashMs: number, modelMs: number, modelHz: number}} ShieldStats */

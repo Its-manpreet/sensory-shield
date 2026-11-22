@@ -8,11 +8,13 @@ Read first: `CLAUDE.md` (brief and rules), `START-HERE.md` (team plan), `docs/IN
 ```sh
 npm install
 npm run content:setup   # once: child-safety models (~1 GB) into models/, text-recognition helper (macOS)
-npm test          # Node unit tests (node --test test/)
+npm test          # Node unit tests (node --test "test/*.test.js")
 npm start         # run the app (tray icon "Shield"; overlay is invisible until something is flagged)
 npm run selftest  # starts the app, prints renderer logs, quits after 6 s
 ```
 macOS: the first capture needs Screen Recording permission (System Settings > Privacy & Security) for Electron, or for your terminal when run with `npm start`.
+
+Windows: same commands in PowerShell or cmd (every npm script is plain Node, no `sh` / `VAR=1` syntax). No permission prompt for screen capture. Sound protection uses the Windows system volume (PowerShell + Core Audio, built in). Explicit-text protection needs the macOS text recognizer, so it stays off on Windows; pictures, flashes, sound and Guardian work. `npm run clips` needs ffmpeg on PATH (`winget install ffmpeg`).
 
 Hotkeys: reveal 5 s `Cmd/Ctrl+Alt+R`, shield on/off `Cmd/Ctrl+Alt+S`, settings `Cmd/Ctrl+Alt+,`.
 

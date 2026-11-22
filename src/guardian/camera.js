@@ -13,8 +13,11 @@ let detector = createSeizureDetector();
 let lastSent = 0;
 let lastLevel = '';
 
-shield.onGuardianConfig(({ minDurationSec }) => {
-  if (minDurationSec !== detector.config.minDurationSec) detector = createSeizureDetector({ minDurationSec });
+let configKey = '';
+shield.onGuardianConfig((config) => {
+  // minDurationSec plus the tuning sliders; rebuild only when something changed (a rebuild re-warms the history)
+  const key = JSON.stringify(config);
+  if (key !== configKey) (configKey = key), (detector = createSeizureDetector(config));
 });
 shield.onGuardianReset(() => detector.reset());
 
@@ -23,7 +26,7 @@ function report(s, force = false) {
   if (!force && s.level === lastLevel && now - lastSent < 500) return;
   lastSent = now;
   lastLevel = s.level;
-  shield.sendGuardianState({ camera: 'ok', level: s.level, progress: s.progress, freqHz: s.freqHz, dark: s.dark, motion: s.motion, rhythm: s.rhythm });
+  shield.sendGuardianState({ camera: 'ok', level: s.level, progress: s.progress, freqHz: s.freqHz, dark: s.dark, motion: s.motion, rhythm: s.rhythm, path: s.path });
 }
 
 try {

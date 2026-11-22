@@ -65,6 +65,8 @@ h2 { font-size: 13px; font-weight: 600; margin: 0; text-transform: uppercase; le
 .state { margin: 2px 0 0; color: var(--muted); }
 .state[data-tone="good"] { color: var(--accent); }
 .state[data-tone="warn"] { color: #b26a00; }
+.state .readout.over { color: #d70015; font-weight: 650; }
+@media (prefers-color-scheme: dark) { .state .readout.over { color: #ff6961; } }
 .section-head { display: flex; justify-content: space-between; align-items: center; }
 .group-head { font-size: 12px; font-weight: 600; color: var(--muted); margin: 18px 0 0; letter-spacing: 0.02em; }
 .row-switch { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-top: 12px; }

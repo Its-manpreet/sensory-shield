@@ -3,6 +3,7 @@
 // Shape: see docs/INTERFACES.md section 4.
 
 /** @typedef {import('./types.js').Profile} Profile */
+import { SEIZURE_PRESETS } from '../engine/seizure.js';
 
 /** @type {Record<string, Profile>} */
 export const DEFAULT_PROFILES = {
@@ -77,6 +78,9 @@ export function defaultSettings() {
       contacts: [], // [{ name, topic }] ntfy topics the contacts subscribe to
       server: 'https://ntfy.sh',
       minDurationSec: 10, // rhythmic this long before the check
+      mode: 'threshold', // 'rhythm' = smart rhythm checks; 'threshold' = plain mode: motion over motionThreshold triggers
+      motionThreshold: 25,
+      ...SEIZURE_PRESETS.default, // detector tuning (minMotion, minAreaFraction, ...): Settings > Guardian > Detection tuning
       countdownSec: 30, // time to answer the check before alerting
     },
   };
